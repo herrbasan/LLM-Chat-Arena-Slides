@@ -62,13 +62,19 @@ if (!window.SLIDESHOW_CONFIG.GATEWAY_URL) {
 });
 
 // APIs
-app.get('/api/projects', (req, res) => {
+app.get('/api/projects', async (req, res) => {
     if (!db) {
         return res.status(500).json({ error: 'Database not initialized' });
     }
-    const projects = db.query({}); // Return all
-    // It is better to return only metadata for the list to save bandwidth if decks are large, but for now we return all.
-    res.json({ projects });
+    try {
+        const projects = await db.query({}); // Return all
+        console.log("DB QUERY RESULTS:", projects);
+        console.log("IS ARRAY?", Array.isArray(projects));
+        // It is better to return only metadata for the list to save bandwidth if decks are large, but for now we return all.
+        res.json({ projects });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.post('/api/projects', (req, res) => {
