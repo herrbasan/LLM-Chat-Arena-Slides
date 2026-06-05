@@ -4,8 +4,6 @@ node_modules/
 server/.env
 
 # Runtime project data and generated render artifacts
-server/data/*.jsonl
-server/data/*.ndb
-server/data/render_cache/
+server/data/
 server/slideshows.jsonl
 pipeline/output/
