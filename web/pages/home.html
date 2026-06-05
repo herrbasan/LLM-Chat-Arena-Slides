@@ -1,0 +1,70 @@
+<div class="page-home">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>Welcome to NUI Boilerplate</h1>
+        <p class="lead">Select a few components below to interact with the platform natively.</p>
+    </header>
+
+    <section>
+        <h2 style="margin-top: 0">Inputs & Actions</h2>
+        <div style="display: flex; gap: var(--nui-space); flex-wrap: wrap;">
+            
+            <nui-input>
+                <input type="text" id="demo-input" placeholder="Type something..." />
+            </nui-input>
+            
+            <nui-select>
+                <select id="demo-select">
+                    <option value="" disabled selected>Choose an option</option>
+                    <option value="hello">Say Hello</option>
+                    <option value="goodbye">Say Goodbye</option>
+                </select>
+            </nui-select>
+
+            <nui-button variant="primary">
+                <button type="button" data-action="demo-run">Execute Action</button>
+            </nui-button>
+            
+        </div>
+        <p id="action-output" style="margin-top: var(--nui-space-half); color: var(--color-success)"></p>
+    </section>
+
+    <hr style="margin: var(--nui-space-double) 0; border: none; border-top: 1px solid var(--border-shade1)" />
+
+    <section>
+        <h2>Dialog Overlays</h2>
+        <div style="display: flex; gap: var(--nui-space);">
+            <nui-button>
+                <button type="button" data-action="dialog-open@#standard-dialog">Open Standard Dialog</button>
+            </nui-button>
+
+            <nui-button>
+                <button type="button" data-action="dialog-open@#page-dialog">Open Page Dialog</button>
+            </nui-button>
+        </div>
+
+        <!-- Dialog: Standard center-screen overlay -->
+        <nui-dialog id="standard-dialog">
+            <dialog>
+                <div class="nui-dialog-alert">
+                    <div class="nui-headline">Standard Dialog</div>
+                    <div class="nui-copy">
+                        <p>This is a standard modal dialog. It traps focus and interrupts the user flow.</p>
+                    </div>
+                    <nui-button-container align="end">
+                        <nui-button variant="primary">
+                            <button type="button" data-action="dialog-close@#standard-dialog">Acknowledge</button>
+                        </nui-button>
+                    </nui-button-container>
+                </div>
+            </dialog>
+        </nui-dialog>
+
+        <!-- Dialog: Page scale overlay (takes over the whole screen) -->
+        <nui-dialog id="page-dialog" mode="page" title="Page Mode Dialog" data-buttons='[{"label": "Close Full Page", "type": "primary", "value": "close"}]'>
+            <div class="nui-copy">
+                <p>The "Page" layout utilizes standard dialog mechanics but expands to cover the app layout, providing more room to breathe for complex forms or workflows.</p>
+            </div>
+        </nui-dialog>
+    </section>
+</div>
+

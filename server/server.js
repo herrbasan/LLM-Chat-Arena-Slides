@@ -1,8 +1,14 @@
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
+const https = require('https');
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
+const crypto = require('crypto');
+
+// Allow self-signed certs for internal services.
+const tlsAgent = new https.Agent({ rejectUnauthorized: false });
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 // Attempt to load nDB
 let nDB;
@@ -14,9 +20,24 @@ try {
     console.error('Ensure that the prebuilt binaries exist and are compatible.');
 }
 
+// Pipeline modules
+const { cleanWithLLM } = require('../pipeline/llm-clean.js');
+const { parseArenaExport } = require('../pipeline/importer.js');
+const { processDeck: ttsProcess } = require('../pipeline/tts.js');
+const { processDeck: alignProcess, ALIGNMENT_VERSION } = require('../pipeline/align.js');
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+
+// Global CSP header (replaces meta tag to avoid browser placement warnings)
+app.use((req, res, next) => {
+    res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; img-src 'self' data:;"
+    );
+    next();
+});
 
 // Explicit Configuration Validation
 const requiredEnvVars = ['PORT', 'LLM_GATEWAY_URL', 'NSPEECH_URL', 'NVOICE_URL', 'NDB_DATA_PATH'];
@@ -37,7 +58,69 @@ if (!fs.existsSync(dbPath)) {
 
 let db;
 if (nDB) {
-    db = new nDB.Database(path.join(dbPath, 'slideshows.jsonl'));
+    db = nDB.Database.open(path.join(dbPath, 'slideshows.jsonl'), { persistence: 'immediate' });
+}
+
+// ─── Render Cache ───────────────────────────────────────────
+// Each project gets its own render cache directory.
+// Audio files are stored per-slide and keyed by renderHash.
+const RENDER_CACHE_ROOT = path.join(dbPath, 'render_cache');
+fs.mkdirSync(RENDER_CACHE_ROOT, { recursive: true });
+
+function getProjectCacheDir(projectId) {
+    const dir = path.join(RENDER_CACHE_ROOT, projectId);
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+}
+
+function computeRenderHash(text, voice, speed) {
+    const state = `${text || ''}|${voice || ''}|${speed || 1.0}`;
+    // Portable 64-bit hash (hex, safe for filenames, consistent with client)
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (let i = 0; i < state.length; i++) {
+        const ch = state.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+}
+
+function getSpokenText(slide) {
+    if (slide.type === 'title' || slide.type === 'end') {
+        return slide.narration || slide.text || '';
+    }
+    return slide.text || slide.narration || '';
+}
+
+function normalizeAlignedWord(word) {
+    return String(word).replace(/[^\w]/g, '').toLowerCase();
+}
+
+function isImmediateDuplicateWord(previousWord, word) {
+    if (!previousWord) return false;
+    if (word.startMs - previousWord.endMs > 250) return false;
+    return normalizeAlignedWord(previousWord.word) === normalizeAlignedWord(word.word);
+}
+
+function getSlideAudioPath(projectId, slideIndex, renderHash) {
+    return path.join(getProjectCacheDir(projectId), `slide_${String(slideIndex).padStart(3, '0')}_${renderHash}.mp3`);
+}
+
+function getSlideCacheMeta(projectId) {
+    const metaPath = path.join(getProjectCacheDir(projectId), 'cache_meta.json');
+    if (fs.existsSync(metaPath)) {
+        try {
+            return JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+        } catch { return {}; }
+    }
+    return {};
+}
+
+function setSlideCacheMeta(projectId, meta) {
+    const metaPath = path.join(getProjectCacheDir(projectId), 'cache_meta.json');
+    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
 }
 
 // Serve Client Config dynamically to avoid hardcoding frontend
@@ -96,7 +179,60 @@ app.get('/api/projects/:id', (req, res) => {
     if (!db) return res.status(500).json({ error: 'Database not initialized' });
     const doc = db.get(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Project not found' });
+
+    // Merge render cache data (tts.words, durationMs) into the response.
+    // The render cache is the source of truth for rendered TTS/alignment data.
+    const deckPath = path.join(getProjectCacheDir(req.params.id), 'deck.json');
+    if (fs.existsSync(deckPath)) {
+        const cached = JSON.parse(fs.readFileSync(deckPath, 'utf-8'));
+        if (cached.slides && doc.slides) {
+            for (let i = 0; i < doc.slides.length; i++) {
+                const cacheSlide = cached.slides[i];
+                if (!cacheSlide || !cacheSlide.tts) continue;
+                if (!doc.slides[i].tts) doc.slides[i].tts = {};
+                // Merge alignment data from cache
+                if (cacheSlide.tts.words) {
+                    doc.slides[i].tts.words = cacheSlide.tts.words;
+                }
+                if (cacheSlide.tts.segments) {
+                    doc.slides[i].tts.segments = cacheSlide.tts.segments;
+                }
+                if (cacheSlide.tts.durationMs) {
+                    doc.slides[i].tts.durationMs = cacheSlide.tts.durationMs;
+                }
+                if (cacheSlide.tts.alignVersion) {
+                    doc.slides[i].tts.alignVersion = cacheSlide.tts.alignVersion;
+                }
+                if (cacheSlide.tts.alignComplete !== undefined) {
+                    doc.slides[i].tts.alignComplete = cacheSlide.tts.alignComplete;
+                }
+                if (cacheSlide.tts.sourceWordCount) {
+                    doc.slides[i].tts.sourceWordCount = cacheSlide.tts.sourceWordCount;
+                }
+                if (cacheSlide.tts.alignedWordCount) {
+                    doc.slides[i].tts.alignedWordCount = cacheSlide.tts.alignedWordCount;
+                }
+                // Ensure audioUrl is present (may be missing in nDB after import)
+                if (cacheSlide.tts.audioUrl && !doc.slides[i].tts.audioUrl) {
+                    doc.slides[i].tts.audioUrl = cacheSlide.tts.audioUrl;
+                }
+            }
+        }
+    }
+
     res.json(doc);
+});
+
+app.get('/api/voices', async (req, res) => {
+    try {
+        const response = await fetch(`${process.env.NSPEECH_URL}/voices`);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const data = await response.json();
+        res.json(data);
+    } catch (err) {
+        console.error('[Server] Failed to fetch voices from nSpeech:', err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.put('/api/projects/:id', (req, res) => {
@@ -120,18 +256,485 @@ app.delete('/api/projects/:id', (req, res) => {
     res.json({ status: 'deleted' });
 });
 
-// Serve the static client directory
-app.use(express.static(path.join(__dirname, '../client')));
+// ─── LLM Slide Generation ────────────────────────────────────
+
+app.post('/api/generate-deck', async (req, res) => {
+    try {
+        const arenaData = req.body;
+        if (!arenaData || !Array.isArray(arenaData.messages)) {
+            return res.status(400).json({ error: 'Invalid Arena export: missing messages array' });
+        }
+        console.log(`[Server] Generate deck: "${arenaData.topic}", ${arenaData.messages.length} messages`);
+        const source = parseArenaExport(arenaData);
+        const deck = await cleanWithLLM(source, null); // null = don't write files
+        res.json(deck);
+    } catch (err) {
+        console.error('[Server] Generate deck failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Cached Render ──────────────────────────────────────────
+
+app.post('/api/render-deck/:id', async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const deck = req.body;
+        if (!deck || !Array.isArray(deck.slides)) {
+            return res.status(400).json({ error: 'Invalid deck: missing slides array' });
+        }
+
+        const cacheMeta = getSlideCacheMeta(projectId);
+        let reRendered = 0;
+        let cached = 0;
+
+        // Load existing render cache to preserve alignment data for cache-hit slides
+        const deckPath = path.join(getProjectCacheDir(projectId), 'deck.json');
+        let prevDeck = null;
+        if (fs.existsSync(deckPath)) {
+            try { prevDeck = JSON.parse(fs.readFileSync(deckPath, 'utf-8')); } catch {}
+        }
+
+        for (let i = 0; i < deck.slides.length; i++) {
+            const slide = deck.slides[i];
+            const text = getSpokenText(slide);
+            const role = slide.speaker || 'narrator';
+            const voiceConfig = deck.voiceMapping[role] || deck.voiceMapping.narrator || { voice: 'en-US-Male', speed: 1.0 };
+            const renderHash = computeRenderHash(text, voiceConfig.voice, voiceConfig.speed);
+
+            const cachedHash = cacheMeta[i];
+            const audioPath = getSlideAudioPath(projectId, i, renderHash);
+            const audioUrl = `/cache/audio/${projectId}/slide_${String(i).padStart(3, '0')}_${renderHash}.mp3`;
+
+            if (cachedHash === renderHash && fs.existsSync(audioPath)) {
+                // Cache hit — reuse existing audio, preserve alignment data from previous render
+                const prevSlide = prevDeck?.slides?.[i];
+                const prevTts = prevSlide?.tts;
+                slide.tts = {
+                    audioFile: path.basename(audioPath),
+                    audioPath: audioPath,
+                    audioUrl: audioUrl,
+                    voice: voiceConfig.voice,
+                    speed: voiceConfig.speed,
+                    renderHash: renderHash,
+                    cached: true,
+                    // Preserve alignment data if the text hasn't changed
+                    ...(prevTts?.renderHash === renderHash && prevTts.alignVersion === ALIGNMENT_VERSION && prevTts.words ? {
+                        words: prevTts.words,
+                        segments: prevTts.segments,
+                        durationMs: prevTts.durationMs,
+                        alignComplete: prevTts.alignComplete,
+                        sourceWordCount: prevTts.sourceWordCount,
+                        alignedWordCount: prevTts.alignedWordCount,
+                        alignVersion: prevTts.alignVersion,
+                    } : {})
+                };
+                cached++;
+                continue;
+            }
+
+            // Cache miss — generate TTS
+            console.log(`[Render] Slide ${i}: cache miss, generating TTS...`);
+            const ttsUrl = `${process.env.NSPEECH_URL}/tts?` + new URLSearchParams({
+                text: text,
+                voice_name: voiceConfig.voice,
+                speed: voiceConfig.speed.toString(),
+                output_format: 'mp3'
+            }).toString();
+
+            const ttsRes = await fetch(ttsUrl);
+            if (!ttsRes.ok) {
+                console.error(`[Render] Slide ${i} TTS failed: HTTP ${ttsRes.status}`);
+                slide.tts = { error: `TTS HTTP ${ttsRes.status}`, renderHash };
+                continue;
+            }
+
+            const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
+            fs.writeFileSync(audioPath, audioBuffer);
+
+            slide.tts = {
+                audioFile: path.basename(audioPath),
+                audioPath: audioPath,
+                audioUrl: audioUrl,
+                voice: voiceConfig.voice,
+                speed: voiceConfig.speed,
+                byteLength: audioBuffer.length,
+                renderHash: renderHash
+            };
+
+            cacheMeta[i] = renderHash;
+            reRendered++;
+        }
+
+        setSlideCacheMeta(projectId, cacheMeta);
+
+        // Save deck before alignment (so we have a checkpoint)
+        fs.writeFileSync(deckPath, JSON.stringify(deck, null, 2), 'utf-8');
+
+        // Ensure audioPath is set for all slides (client may only send audioUrl)
+        for (let i = 0; i < deck.slides.length; i++) {
+            const slide = deck.slides[i];
+            if (slide.tts && slide.tts.audioUrl && !slide.tts.audioPath) {
+                const audioFile = path.basename(slide.tts.audioUrl);
+                slide.tts.audioPath = path.join(RENDER_CACHE_ROOT, projectId, audioFile);
+            }
+        }
+
+        // Quick nVoice health check before attempting alignment
+        let nVoiceAvailable = false;
+        try {
+            const nvRes = await fetch(process.env.NVOICE_URL, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
+            nVoiceAvailable = nvRes.ok;
+        } catch { /* nVoice not available */ }
+
+        if (nVoiceAvailable) {
+            console.log(`[Render] ${reRendered} generated, ${cached} cached. Running alignment...`);
+            let alignAttempted = 0;
+            // Align all slides that have audio but no word timing data
+            for (let i = 0; i < deck.slides.length; i++) {
+                const slide = deck.slides[i];
+                const hasTTS = !!slide.tts;
+                const hasError = slide.tts?.error;
+                const hasAudioPath = slide.tts?.audioPath;
+                const audioExists = hasAudioPath ? fs.existsSync(slide.tts.audioPath) : false;
+                const hasWords = slide.tts?.words?.length > 0;
+                console.log(`[Render] Slide ${i}: hasTTS=${hasTTS} hasError=${!!hasError} audioPath=${hasAudioPath} audioExists=${audioExists} hasWords=${hasWords}`);
+                if (!slide.tts || slide.tts.error || !slide.tts.audioPath) continue;
+                if (!fs.existsSync(slide.tts.audioPath)) continue;
+                if (slide.tts.alignVersion === ALIGNMENT_VERSION && slide.tts.words && slide.tts.words.length > 0) continue;
+
+                alignAttempted++;
+                try {
+                    const alignRes = await alignSingleSlide(slide, i);
+                    if (alignRes) {
+                        slide.tts.words = alignRes.words;
+                        slide.tts.segments = alignRes.segments;
+                        slide.tts.durationMs = alignRes.durationMs;
+                        slide.tts.alignComplete = alignRes.alignComplete;
+                        slide.tts.sourceWordCount = alignRes.sourceWordCount;
+                        slide.tts.alignedWordCount = alignRes.alignedWordCount;
+                        slide.tts.alignVersion = ALIGNMENT_VERSION;
+                        console.log(`[Render] Slide ${i}: aligned ${alignRes.words.length} words`);
+                    }
+                } catch (err) {
+                    console.error(`[Render] Slide ${i} alignment failed:`, err.message);
+                    slide.tts.alignError = err.message;
+                }
+            }
+            console.log(`[Render] Alignment complete: ${alignAttempted} slides attempted`);
+        } else {
+            console.log(`[Render] ${reRendered} generated, ${cached} cached. nVoice unavailable — skipping alignment.`);
+        }
+
+        // Save updated deck with alignment data to render cache
+        fs.writeFileSync(deckPath, JSON.stringify(deck, null, 2), 'utf-8');
+
+        // Persist rendered deck metadata back to nDB so render page shows correct state
+        if (db) {
+            const existing = db.get(projectId);
+            if (existing) {
+                db.update(projectId, {
+                    ...existing,
+                    slides: deck.slides,
+                    updatedAt: Date.now()
+                });
+            }
+        }
+
+        console.log(`[Render] Complete for ${projectId}: ${reRendered} generated, ${cached} cached, ${deck.slides.length} slides`);
+        res.json(deck);
+    } catch (err) {
+        console.error('[Server] Render failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Per-Slide Render ───────────────────────────────────────
+
+app.post('/api/render-slide/:id/:idx', async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const slideIdx = parseInt(req.params.idx, 10);
+
+        if (!db) return res.status(500).json({ error: 'Database not initialized' });
+        const doc = db.get(projectId);
+        if (!doc) return res.status(404).json({ error: 'Project not found' });
+
+        const deck = doc;
+        if (!deck.slides || slideIdx < 0 || slideIdx >= deck.slides.length) {
+            return res.status(400).json({ error: 'Invalid slide index' });
+        }
+
+        const slide = deck.slides[slideIdx];
+        const text = getSpokenText(slide);
+        const role = slide.speaker || 'narrator';
+        const voiceConfig = deck.voiceMapping[role] || deck.voiceMapping.narrator || { voice: 'en-US-Male', speed: 1.0 };
+        const renderHash = computeRenderHash(text, voiceConfig.voice, voiceConfig.speed);
+
+        const cacheMeta = getSlideCacheMeta(projectId);
+        const cacheDir = getProjectCacheDir(projectId);
+        const audioPath = getSlideAudioPath(projectId, slideIdx, renderHash);
+        const audioUrl = `/cache/audio/${projectId}/slide_${String(slideIdx).padStart(3, '0')}_${renderHash}.mp3`;
+        const deckPath = path.join(cacheDir, 'deck.json');
+
+        // Load existing cache for alignment preservation
+        let existingSlide = null;
+        if (fs.existsSync(deckPath)) {
+            try {
+                const cached = JSON.parse(fs.readFileSync(deckPath, 'utf-8'));
+                existingSlide = cached.slides?.[slideIdx];
+            } catch {}
+        }
+
+        // Check audio cache hit (reuse existing TTS audio if hash matches)
+        const audioCached = cacheMeta[slideIdx] === renderHash && fs.existsSync(audioPath);
+
+        if (!audioCached) {
+            // Generate TTS
+            console.log(`[Render] Slide ${slideIdx}: generating TTS...`);
+            const ttsUrl = `${process.env.NSPEECH_URL}/tts?` + new URLSearchParams({
+                text, voice_name: voiceConfig.voice, speed: voiceConfig.speed.toString(), output_format: 'mp3'
+            }).toString();
+
+            const ttsRes = await fetch(ttsUrl);
+            if (!ttsRes.ok) {
+                slide.tts = { error: `TTS HTTP ${ttsRes.status}`, renderHash };
+                return res.json({ slideIdx, slide, error: slide.tts.error });
+            }
+
+            const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
+            fs.writeFileSync(audioPath, audioBuffer);
+
+            slide.tts = {
+                audioFile: path.basename(audioPath),
+                audioPath,
+                audioUrl,
+                voice: voiceConfig.voice,
+                speed: voiceConfig.speed,
+                byteLength: audioBuffer.length,
+                renderHash
+            };
+
+            cacheMeta[slideIdx] = renderHash;
+            setSlideCacheMeta(projectId, cacheMeta);
+        } else {
+            // Audio cache hit — reuse, but check for alignment data
+            slide.tts = {
+                audioFile: path.basename(audioPath),
+                audioPath,
+                audioUrl,
+                voice: voiceConfig.voice,
+                speed: voiceConfig.speed,
+                renderHash,
+                cached: true,
+                ...(existingSlide?.tts?.renderHash === renderHash && existingSlide.tts.alignVersion === ALIGNMENT_VERSION && existingSlide.tts.words ? {
+                    words: existingSlide.tts.words,
+                    segments: existingSlide.tts.segments,
+                    durationMs: existingSlide.tts.durationMs,
+                    alignComplete: existingSlide.tts.alignComplete,
+                    sourceWordCount: existingSlide.tts.sourceWordCount,
+                    alignedWordCount: existingSlide.tts.alignedWordCount,
+                    alignVersion: existingSlide.tts.alignVersion,
+                } : {})
+            };
+        }
+
+        // Save deck checkpoint
+        if (!fs.existsSync(deckPath)) {
+            fs.writeFileSync(deckPath, JSON.stringify({ slides: [] }, null, 2), 'utf-8');
+        }
+        const cachedDeck = JSON.parse(fs.readFileSync(deckPath, 'utf-8'));
+        if (!cachedDeck.slides) cachedDeck.slides = [];
+        cachedDeck.slides[slideIdx] = structuredClone(slide);
+        fs.writeFileSync(deckPath, JSON.stringify(cachedDeck, null, 2), 'utf-8');
+
+        // Run alignment (always, unless words are already present and fresh)
+        const needsAlignment = slide.tts.alignVersion !== ALIGNMENT_VERSION || !slide.tts.words || slide.tts.words.length === 0;
+
+        let nVoiceAvailable = false;
+        try {
+            const nvRes = await fetch(process.env.NVOICE_URL, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
+            nVoiceAvailable = nvRes.ok;
+        } catch {}
+
+        if (needsAlignment && nVoiceAvailable && slide.tts.audioPath && fs.existsSync(slide.tts.audioPath)) {
+            try {
+                const alignRes = await alignSingleSlide(slide, slideIdx);
+                if (alignRes) {
+                    slide.tts.words = alignRes.words;
+                    slide.tts.segments = alignRes.segments;
+                    slide.tts.durationMs = alignRes.durationMs;
+                    slide.tts.alignComplete = alignRes.alignComplete;
+                    slide.tts.sourceWordCount = alignRes.sourceWordCount;
+                    slide.tts.alignedWordCount = alignRes.alignedWordCount;
+                    slide.tts.alignVersion = ALIGNMENT_VERSION;
+                    console.log(`[Render] Slide ${slideIdx}: aligned ${alignRes.words.length} words`);
+                }
+            } catch (err) {
+                console.error(`[Render] Slide ${slideIdx} alignment failed:`, err.message);
+                slide.tts.alignError = err.message;
+            }
+        }
+
+        // Save final deck to cache
+        const finalDeck = JSON.parse(fs.readFileSync(deckPath, 'utf-8'));
+        finalDeck.slides[slideIdx] = structuredClone(slide);
+        fs.writeFileSync(deckPath, JSON.stringify(finalDeck, null, 2), 'utf-8');
+
+        // Update nDB
+        const existing = db.get(projectId);
+        if (existing) {
+            existing.slides[slideIdx] = slide;
+            existing.updatedAt = Date.now();
+            db.update(projectId, existing);
+        }
+
+        res.json({ slideIdx, slide });
+    } catch (err) {
+        console.error('[Server] Single slide render failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+async function alignSingleSlide(slide, slideIndex) {
+    const text = getSpokenText(slide);
+    if (!text.trim()) return null;
+    if (!slide.tts || !slide.tts.audioPath) return null;
+
+    const audioBuffer = fs.readFileSync(slide.tts.audioPath);
+    const url = `${process.env.NVOICE_URL}/align?text=${encodeURIComponent(text)}`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: audioBuffer,
+            signal: controller.signal,
+            agent: tlsAgent
+        });
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+            throw new Error(`nVoice alignment failed: HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (!Array.isArray(data.segments) || data.segments.length === 0) return null;
+
+        const segments = [];
+        const rawWords = [];
+        let previousWord = null;
+        for (let segmentIndex = 0; segmentIndex < data.segments.length; segmentIndex++) {
+            const seg = data.segments[segmentIndex];
+            const segment = {
+                index: segmentIndex,
+                text: seg.text || '',
+                startMs: Math.round(seg.start * 1000),
+                endMs: Math.round(seg.end * 1000),
+                words: []
+            };
+            if (Array.isArray(seg.words)) {
+                for (const w of seg.words) {
+                    const word = {
+                        word: String(w.word).trim(),
+                        startMs: Math.round(w.start * 1000),
+                        endMs: Math.round(w.end * 1000),
+                        probability: w.probability || 1.0,
+                        segmentIndex
+                    };
+                    if (isImmediateDuplicateWord(previousWord, word)) continue;
+                    segment.words.push(word);
+                    rawWords.push(word);
+                    previousWord = word;
+                }
+            }
+            segments.push(segment);
+        }
+        if (rawWords.length === 0) return null;
+
+        const durationMs = segments[segments.length - 1].endMs;
+        const sourceWordCount = text.split(/\s+/).filter(w => w.length > 0).length;
+        const alignedWordCount = rawWords.length;
+        const alignComplete = alignedWordCount >= Math.floor(sourceWordCount * 0.85);
+
+        return {
+            words: rawWords,
+            segments,
+            durationMs,
+            segmentCount: segments.length,
+            sourceWordCount,
+            alignedWordCount,
+            alignComplete
+        };
+    } catch (err) {
+        clearTimeout(timeout);
+        if (err.name === 'AbortError') {
+            throw new Error('nVoice alignment timed out after 60s');
+        }
+        throw err;
+    }
+}
+
+// ─── Realtime TTS Preview ───────────────────────────────────
+
+app.post('/api/tts-preview', async (req, res) => {
+    try {
+        const { text, voice, speed } = req.body;
+        if (!text) return res.status(400).json({ error: 'Missing text' });
+
+        const ttsUrl = `${process.env.NSPEECH_URL}/tts?` + new URLSearchParams({
+            text: text,
+            voice_name: voice || 'en-US-Male',
+            speed: (speed || 1.0).toString(),
+            output_format: 'mp3'
+        }).toString();
+
+        const ttsRes = await fetch(ttsUrl);
+        if (!ttsRes.ok) {
+            return res.status(502).json({ error: `TTS failed: HTTP ${ttsRes.status}` });
+        }
+
+        // Stream the response directly to the client so MediaSource can start immediately
+        res.setHeader('Content-Type', 'audio/mpeg');
+        ttsRes.body.pipe(res);
+    } catch (err) {
+        console.error('[Server] TTS preview failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Serve the static web directory (NUI-based management UI)
+app.use(express.static(path.join(__dirname, '../web')));
 
 // Serve the NUI components directly mapping to /nui
 app.use('/nui', express.static(path.join(__dirname, '../modules/nui_wc2/NUI')));
 
-// Fallback to index.html for SPA routing
+// Serve modules (for nui addon imports from web/)
+app.use('/modules', express.static(path.join(__dirname, '../modules')));
+
+// Serve render cache audio files
+app.use('/cache/audio', express.static(RENDER_CACHE_ROOT));
+
+// Serve pipeline output for playback testing
+app.use('/pipeline', express.static(path.join(__dirname, '../pipeline')));
+
+// Fallback to index.html for SPA routing (only for non-API, non-asset routes)
 app.use((req, res) => {
-    res.sendFile(path.join(__dirname, '../client/index.html'));
+    const p = req.path;
+    // Don't serve index.html for API calls or file assets
+    if (p.startsWith('/api/') || p.startsWith('/cache/') || p.startsWith('/pipeline/') ||
+        p.startsWith('/pages/') || p.startsWith('/js/') || p.startsWith('/css/') ||
+        p.startsWith('/nui/') || p.startsWith('/modules/') || p === '/config.js') {
+        return res.status(404).json({ error: 'Not found' });
+    }
+    res.sendFile(path.join(__dirname, '../web/index.html'));
 });
 
 app.listen(PORT, () => {
     console.log(`[Server] Slideshow backend running on http://localhost:${PORT}`);
-    console.log(`[Server] Serving frontend from: ${path.join(__dirname, '../client')}`);
+    console.log(`[Server] Serving frontend from: ${path.join(__dirname, '../web')}`);
 });

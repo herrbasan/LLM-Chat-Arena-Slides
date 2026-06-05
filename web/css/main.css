@@ -1,0 +1,46 @@
+/* NUI Boilerplate Specific Styles */
+
+/* 
+ * NUI sidebars don't enforce padding by default to stay layout-agnostic.
+ * For this application, we want standard spacing around sidebar contents.
+ */
+.config-sidebar {
+    padding: var(--nui-space);
+}
+
+/* ─── Word Highlighting (Playback) ─────────────────────────── */
+
+.words-container {
+    font-size: 22px;
+    line-height: 1.7;
+    word-spacing: 0.15em;
+    margin: 0 0 var(--nui-space) 0;
+}
+
+.words-container:last-child {
+    margin-bottom: 0;
+}
+
+.words-container .word {
+    display: inline;
+    transition: opacity 0.08s;
+    padding: 1px 2px;
+    opacity: 0.4;
+}
+
+.words-container .word.active {
+    opacity: 1;
+}
+
+.words-container .word.past {
+    opacity: 0.8;
+}
+
+.words-container .word.future {
+    opacity: 0.4;
+}
+
+.words-container .segment {
+    display: inline;
+    opacity: 1;
+}

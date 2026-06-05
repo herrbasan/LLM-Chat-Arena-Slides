@@ -1,0 +1,57 @@
+<div class="page-render">
+    <div style="display: grid; grid-template-columns: 320px 1fr; gap: var(--nui-space); height: calc(100vh - 4rem); padding: var(--nui-space); box-sizing: border-box;">
+        <!-- Left: Slide list + controls -->
+        <div style="display: flex; flex-direction: column; gap: var(--nui-space); overflow: hidden;">
+            <nui-card>
+                <h3 style="margin-top: 0">Render</h3>
+                <div id="render-status" style="margin-bottom: var(--nui-space);">
+                    <p style="color: var(--text-color-dim); font-size: var(--font-size-small);">Click Render to generate audio and timings.</p>
+                </div>
+                <nui-progress id="render-progress" value="0" max="100" style="display: none;"></nui-progress>
+                <nui-button variant="primary" data-action="render-all" style="margin-top: var(--nui-space);">
+                    <button type="button" id="btn-render">Render All</button>
+                </nui-button>
+            </nui-card>
+
+            <nui-card style="flex: 1; overflow: hidden; display: flex; flex-direction: column;">
+                <h3 style="margin-top: 0">Slides</h3>
+                <div id="render-slide-list" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: var(--nui-space-half);">
+                    <!-- Injected by JS -->
+                </div>
+            </nui-card>
+        </div>
+
+        <!-- Right: Player -->
+        <div style="display: flex; flex-direction: column; overflow: hidden;">
+            <div id="player-container" style="flex: 1; display: flex; flex-direction: column; align-items: center; overflow: hidden;">
+                <div id="player-slide-content" style="max-width: 900px; width: 100%; padding: var(--nui-space-double); overflow-y: auto; flex: 1;">
+                    <div style="text-align: center; color: var(--text-color-dim);">
+                        <p>Render the deck to enable playback.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Progress bar -->
+            <div id="playback-progress-bar" style="width: 100%; height: 4px; background: var(--border-shade1); cursor: pointer; flex-shrink: 0;">
+                <div id="playback-progress-fill" style="height: 100%; background: var(--color-highlight); width: 0%; transition: width 0.1s linear;"></div>
+            </div>
+
+            <!-- Controls -->
+            <div style="display: flex; align-items: center; justify-content: center; gap: var(--nui-space); padding: var(--nui-space); background: var(--color-shade1); flex-shrink: 0;">
+                <nui-button variant="icon" data-action="player-prev">
+                    <button type="button" aria-label="Previous slide">←</button>
+                </nui-button>
+                <nui-button variant="primary" data-action="player-play" style="width: 3rem; height: 3rem;">
+                    <button type="button" id="btn-play" aria-label="Play"><nui-icon name="play"></nui-icon></button>
+                </nui-button>
+                <nui-button variant="icon" data-action="player-next">
+                    <button type="button" aria-label="Next slide">→</button>
+                </nui-button>
+                <span id="time-display" style="font-size: var(--font-size-xsmall); color: var(--text-color-dim); min-width: 5rem; text-align: center;">00:00 / 00:00</span>
+                <nui-button variant="ghost" data-action="player-speed" id="btn-speed" style="font-size: var(--font-size-small);">
+                    <button type="button">1.0x</button>
+                </nui-button>
+            </div>
+        </div>
+    </div>
+</div>

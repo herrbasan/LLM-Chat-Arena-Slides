@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
+    <!-- CSP is served via HTTP header in server.js to avoid meta-tag placement warnings -->
+    <title>Arena Slideshow</title>
+    <!-- Core NUI CSS -->
+    <link rel="stylesheet" href="/nui/css/nui-theme.css">
+    <!-- Addon CSS -->
+    <link rel="stylesheet" href="/nui/css/modules/nui-list.css">
+    <!-- Addon JS -->
+    <script type="module" src="/nui/lib/modules/nui-list.js"></script>
+    <!-- App CSS -->
+    <link rel="stylesheet" href="/css/main.css">
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; }
+        nui-app:not(.nui-ready) { display: none; }
+        nui-loading:not(.active) { display: none; }
+    </style>
+    <!-- Dynamic config from server -->
+    <script src="/js/config.js"></script>
+    <!-- Main App Logic -->
+    <script type="module" src="/js/app.js"></script>
+</head>
+<body>
+    <nui-loading mode="bar"></nui-loading>
+
+    <nui-app sidebar-width="18rem" content-width="100%">
+        <nui-skip-links></nui-skip-links>
+
+        <nui-app-header>
+            <header>
+                <div slot="left">
+                    <nui-button data-action="toggle-sidebar" variant="icon">
+                        <button type="button" aria-label="Toggle sidebar">
+                            <nui-icon name="menu">☰</nui-icon>
+                        </button>
+                    </nui-button>
+                    <h1>Arena Slideshow</h1>
+                </div>
+                <div slot="right">
+                    <nui-button data-action="toggle-theme" variant="icon">
+                        <button type="button" aria-label="Toggle theme">
+                            <nui-icon name="brightness"></nui-icon>
+                        </button>
+                    </nui-button>
+                </div>
+            </header>
+        </nui-app-header>
+
+        <nui-sidebar behavior="primary">
+            <nui-link-list mode="tree" id="main-navigation"></nui-link-list>
+        </nui-sidebar>
+
+        <nui-content>
+            <nui-main></nui-main>
+        </nui-content>
+    </nui-app>
+</body>
+</html>

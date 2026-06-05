@@ -1,0 +1,55 @@
+<div class="page-editor">
+    <div style="display: grid; grid-template-columns: 320px 1fr 380px; gap: var(--nui-space); height: calc(100vh - 4rem); padding: var(--nui-space); box-sizing: border-box;">
+        <!-- Left: Voice Mapping -->
+        <div style="display: flex; flex-direction: column; gap: var(--nui-space); overflow: hidden;">
+            <nui-card>
+                <h3 style="margin-top: 0">Voice Mapping</h3>
+                <div id="voice-mapping-panel" style="display: flex; flex-direction: column; gap: var(--nui-space);">
+                    <!-- Injected by JS -->
+                </div>
+            </nui-card>
+            <nui-card style="flex: 1; overflow: hidden; display: flex; flex-direction: column;">
+                <h3 style="margin-top: 0">Source</h3>
+                <div id="conversation-source" style="flex: 1; overflow-y: auto; font-size: var(--font-size-small);">
+                    <!-- Injected by JS -->
+                </div>
+            </nui-card>
+        </div>
+
+        <!-- Center: Slide Deck -->
+        <div style="display: flex; flex-direction: column; overflow: hidden;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--nui-space);">
+                <h2 style="margin: 0">Slides</h2>
+                <div style="display: flex; gap: var(--nui-space-half);">
+                    <nui-button variant="primary" data-action="generate-deck">
+                        <button type="button">Generate with AI</button>
+                    </nui-button>
+                    <nui-button data-action="goto-render">
+                        <button type="button">Render & Play</button>
+                    </nui-button>
+                </div>
+            </div>
+            <div id="slide-deck" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: var(--nui-space);">
+                <!-- Slide cards injected here -->
+            </div>
+        </div>
+
+        <!-- Right: LLM Chat -->
+        <div style="display: flex; flex-direction: column; overflow: hidden;">
+            <h3 style="margin: 0 0 var(--nui-space) 0">Slide AI</h3>
+            <div id="chat-history" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: var(--nui-space-half); margin-bottom: var(--nui-space);">
+                <!-- Chat messages -->
+            </div>
+            <div style="display: flex; gap: var(--nui-space-half);">
+                <div style="flex: 1;">
+                    <nui-input>
+                        <input type="text" id="chat-input" placeholder="Ask the AI to edit slides...">
+                    </nui-input>
+                </div>
+                <nui-button variant="primary" data-action="chat-send">
+                    <button type="button">Send</button>
+                </nui-button>
+            </div>
+        </div>
+    </div>
+</div>

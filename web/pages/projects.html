@@ -1,0 +1,26 @@
+<div class="page-projects">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>Projects</h1>
+        <p class="lead">Manage your slideshow projects. Import an Arena conversation to begin.</p>
+    </header>
+
+    <section style="margin-bottom: var(--nui-space-double)">
+        <nui-dropzone id="import-dropzone">
+            <div data-drop="import" style="padding: var(--nui-space-triple); text-align: center; border: 2px dashed var(--border-shade2); border-radius: var(--border-radius2);">
+                <p><strong>Drop Arena JSON export here</strong></p>
+                <p style="color: var(--text-color-dim);">or</p>
+                <nui-button variant="primary">
+                    <button type="button" id="btn-import-file">Select File</button>
+                </nui-button>
+                <input type="file" id="import-file-input" accept="application/json" hidden>
+            </div>
+        </nui-dropzone>
+    </section>
+
+    <section>
+        <h2 style="margin-bottom: var(--nui-space)">Your Projects</h2>
+        <div style="position: relative; height: 500px;">
+            <nui-list id="project-list"></nui-list>
+        </div>
+    </section>
+</div>
