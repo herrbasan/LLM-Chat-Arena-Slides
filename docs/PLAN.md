@@ -76,7 +76,7 @@ GET http://192.168.0.145:2233/tts?text=...&voice_name=...&speed=...&output_forma
 
 **Planned endpoint** (being worked on by the nVoice team):
 ```
-POST http://localhost:2244/align
+POST https://192.168.0.100:2244/align
 Content-Type: multipart/form-data
   audio: <binary audio file>
   text: "This is the original slide text."
@@ -114,7 +114,7 @@ Until the `/align` endpoint is ready, use the existing `POST /transcribe` endpoi
 
 **Current endpoint:**
 ```
-POST http://localhost:2244/transcribe
+POST https://192.168.0.100:2244/transcribe
 Content-Type: application/octet-stream
 Body: raw binary audio (WAV, MP3, etc.)
 ```
@@ -336,7 +336,7 @@ Voice list is fetched from nSpeech `http://192.168.0.145:2233/voices`. Each role
 
 ## UI Design
 
-The app uses a tab-based navigation workflow (via `<nui-tabs>`) to guide the user from project creation through to final playback.
+The app uses a tab-based navigation workflow (via `<nui-tabs>`) to guide the user from project creation through to final playback. The layout runs border-to-border across the screen (`100vh`/`100vw`) without an app header, fixing the tabs at the upper boundary.
 
 ### Tab 1: Dashboard / Projects
 - **Purpose:** The landing page.
@@ -345,12 +345,14 @@ The app uses a tab-based navigation workflow (via `<nui-tabs>`) to guide the use
 ### Tab 2: Edit (Side-by-Side)
 - **Purpose:** Interactive slide deck generation and editing.
 - **Layout:** Two columns.
-  - **Left Column (Steering):** Shows conversation metadata, voice mapping selects (`<nui-select>`), chat history with the LLM, and a chat input (`<nui-input>`).
-  - **Right Column (The Deck):** A reactive, scrollable list of NUI cards (`<nui-card>`) representing the current state of the slideshow, driven by the LLM tool executions.
+  - **Left Column (Steering):** Shows the raw, imported **Conversation** stream on top (with a prominent "Generate Slides" button), and the **Slide AI** LLM chat history/input on the bottom. 
+  - **Right Column (The Deck):** A reactive, scrollable list of NUI cards (`<nui-card>`) representing the current generated slide format, managed by LLM tool executions.
 
 ### Tab 3: Preview
-- **Purpose:** Quick sanity check without heavy processing.
-- **Content:** Displays the slideshow visually. When the user navigates through the slides, it fetches audio on-the-fly from nSpeech (realtime audio generation) but **does not** perform the forced alignment. There is no sentence or word following yet.
+- **Purpose:** Quick sanity check & Configuration of assets prior to rendering.
+- **Layout:** Two columns.
+  - **Left Column (Voice Mapping):** Voice mapping selects (`<nui-select>`) to configure the Narrator, Participant A, and Participant B.
+  - **Right Column:** Displays the slideshow visually. When the user navigates through the slides, it fetches audio on-the-fly from nSpeech (realtime audio generation) but **does not** perform the forced alignment.
 
 ### Tab 4: Render & Play
 - **Purpose:** Final production generation and high-quality playback.
@@ -513,8 +515,8 @@ This conversation has a natural dramatic arc that would work beautifully as a na
 - `reference/time_mapping_example.json`: Example of the word time-mapping format.
 - Arena export format: documented above in "Arena Export Format (Input)"
 - nSpeech API: `http://192.168.0.145:2233/tts` (GET, returns audio) and `/voices` (GET, returns voice list)
-- nVoice API (current): `POST http://localhost:2244/transcribe`, accepts raw binary audio, returns segments + word timestamps. Uses faster-whisper with `word_timestamps=True`.
-- nVoice API (planned): `POST http://localhost:2244/align`, accepts audio + text (multipart), returns word timings aligned to supplied text. **Preferred endpoint.**
+- nVoice API (current): `POST https://192.168.0.100:2244/transcribe`, accepts raw binary audio, returns segments + word timestamps. Uses faster-whisper with `word_timestamps=True`.
+- nVoice API (planned): `POST https://192.168.0.100:2244/align`, accepts audio + text (multipart), returns word timings aligned to supplied text. **Preferred endpoint.**
 - Gateway streaming: `GatewayClient` class from Chat project's `chat/js/client-sdk.js`
 - NUI components: `modules/nui_wc2/` — theme variables, component usage. See cheatsheet at `modules/nui_wc2/LLM-CHEATSHEET.md`.
 - Reference Repo: `https://github.com/herrbasan/LLM-Gateway-Chat` (useful for chat UI references and `GatewayClient` implementation as it also uses NUI Web Components).

@@ -1,0 +1,44 @@
+/* client/css/slideshow.css */
+
+/* Add specific styling for slideshow layout without overriding NUI variables */
+
+body.nui-theme-dark {
+    /* Use NUI variables where possible */
+}
+
+/* Chat History Layout */
+#chat-history {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nui-space-half);
+}
+
+.chat-message {
+    padding: var(--nui-space-half);
+    border-radius: var(--border-radius2);
+    font-size: var(--font-size-small);
+}
+
+.chat-message.user {
+    background: var(--color-shade2);
+    align-self: flex-end;
+}
+
+.chat-message.assistant {
+    background: var(--color-shade1);
+    align-self: flex-start;
+}
+
+/* Slide Cards styling */
+.slide-card-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: var(--nui-space-half);
+    color: var(--text-color-dim);
+    font-size: var(--font-size-xsmall);
+}
+
+.slide-card-text {
+    font-size: var(--font-size-medium);
+    line-height: 1.5;
+}

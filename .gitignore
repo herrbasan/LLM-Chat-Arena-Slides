@@ -1,0 +1,11 @@
+node_modules/
+
+# Local service configuration
+server/.env
+
+# Runtime project data and generated render artifacts
+server/data/*.jsonl
+server/data/*.ndb
+server/data/render_cache/
+server/slideshows.jsonl
+pipeline/output/
