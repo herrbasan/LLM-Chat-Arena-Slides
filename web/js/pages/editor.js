@@ -19,7 +19,7 @@ nui.registerPage('editor', {
             deck = await res.json();
             window.SLIDESHOW_APP.currentProject = projectId;
             window.SLIDESHOW_APP.deck = deck;
-            if (window.SLIDESHOW_APP.refreshSidebar) window.SLIDESHOW_APP.refreshSidebar();
+            if (window.SLIDESHOW_APP.updateStepper) window.SLIDESHOW_APP.updateStepper();
         } catch (err) {
             nui.components.banner.show({ content: 'Failed to load project', priority: 'alert', autoClose: 5000 });
             return;

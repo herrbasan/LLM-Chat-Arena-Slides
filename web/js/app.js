@@ -9,7 +9,83 @@ window.SLIDESHOW_APP = {
     projects: []
 };
 
-// Theme toggle
+const STEPS = ['projects', 'editor', 'render'];
+
+// ─── Stepper ────────────────────────────────────────────────────
+//
+// The stepper lives in the header and reflects the current route. It
+// also enforces the workflow: steps 2 (Editor) and 3 (Render & Play)
+// are disabled until a project is loaded. The "current" step is the
+// one whose page is active.
+//
+// Wiring:
+//   - data-action="goto-step:<step>" navigates to that step's URL.
+//   - data-action="toggle-theme" toggles light/dark color scheme.
+//   - The "is-active" class and `variant` attribute are updated on
+//     every route change via the nui-route-change event.
+
+function getActiveStep() {
+    const hash = window.location.hash || '';
+    if (hash.includes('page=editor')) return 'editor';
+    if (hash.includes('page=render')) return 'render';
+    if (hash.includes('page=projects')) return 'projects';
+    return 'projects'; // default
+}
+
+function stepHref(step) {
+    const projectId = window.SLIDESHOW_APP.currentProject;
+    if (step === 'projects') return '#page=projects';
+    if (projectId) {
+        if (step === 'editor') return `#page=editor&id=${projectId}`;
+        if (step === 'render') return `#page=render&id=${projectId}`;
+    }
+    return '#page=projects';
+}
+
+function updateStepper() {
+    const active = getActiveStep();
+    const projectId = window.SLIDESHOW_APP.currentProject;
+    const stepper = document.querySelector('.stepper');
+    if (!stepper) return;
+
+    for (const step of STEPS) {
+        const btn = stepper.querySelector(`nui-button[data-step="${step}"]`);
+        if (!btn) continue;
+        const innerBtn = btn.querySelector('button');
+        const isActive = step === active;
+        const requiresProject = step !== 'projects';
+        const isEnabled = !requiresProject || !!projectId;
+
+        // Update href so click navigates correctly
+        const wrapper = btn;
+        const href = stepHref(step);
+        // We render <nui-button><button>...</button></nui-button>. The
+        // inner <button> doesn't natively navigate; we use the data-action
+        // handler which reads the step from the data-action. So we don't
+        // need to set href on the inner button. But we should keep the
+        // nui-button in sync visually.
+
+        if (isActive) {
+            btn.setAttribute('variant', 'primary');
+            btn.classList.add('is-active');
+        } else {
+            btn.setAttribute('variant', isEnabled ? 'outline' : 'ghost');
+            btn.classList.remove('is-active');
+        }
+        if (innerBtn) {
+            innerBtn.disabled = !isEnabled;
+        }
+    }
+}
+
+window.SLIDESHOW_APP.updateStepper = updateStepper;
+window.SLIDESHOW_APP.stepHref = stepHref;
+
+// Re-render the stepper whenever the route changes
+document.addEventListener('nui-route-change', updateStepper);
+window.addEventListener('hashchange', updateStepper);
+
+// Global data-action handler (theme toggle + stepper navigation)
 document.addEventListener('click', (e) => {
     const actionEl = e.target.closest('[data-action]');
     if (!actionEl) return;
@@ -19,9 +95,20 @@ document.addEventListener('click', (e) => {
     const [action, param] = actionPart.split(':');
 
     switch (action) {
-        case 'toggle-sidebar':
-            document.querySelector('nui-app').toggleSidebar(param || 'left');
+        case 'goto-step': {
+            const step = param;
+            const projectId = window.SLIDESHOW_APP.currentProject;
+            if ((step === 'editor' || step === 'render') && !projectId) {
+                nui.components.banner.show({
+                    content: 'Select or import a project first.',
+                    priority: 'info',
+                    autoClose: 3000
+                });
+                return;
+            }
+            window.location.hash = stepHref(step);
             break;
+        }
         case 'toggle-theme': {
             const current = document.documentElement.style.colorScheme || 'dark';
             const next = current === 'dark' ? 'light' : 'dark';
@@ -31,51 +118,11 @@ document.addEventListener('click', (e) => {
     }
 });
 
-// Sidebar navigation data builder
-function getNavData() {
-    const items = [
-        { label: 'Projects', href: '#page=projects', icon: 'folder' }
-    ];
-    const projectId = window.SLIDESHOW_APP.currentProject;
-    if (projectId) {
-        items.push(
-            { label: 'Editor', href: `#page=editor&id=${projectId}`, icon: 'edit' },
-            { label: 'Render & Play', href: `#page=render&id=${projectId}`, icon: 'play' }
-        );
-    }
-    return [{ label: 'Arena Slideshow', items }];
-}
-
-async function initSidebar() {
-    await nui.ready();
-    const nav = document.getElementById('main-navigation');
-    if (!nav) return;
-
-    function loadNav() {
-        if (!nav.loadData) return;
-        nav.loadData(getNavData());
-    }
-
-    if (nav.loadData) {
-        loadNav();
-    } else {
-        customElements.whenDefined('nui-link-list').then(loadNav);
-    }
-}
-
-// Rebuild sidebar when project changes
-function refreshSidebar() {
-    const nav = document.getElementById('main-navigation');
-    if (nav && nav.loadData) {
-        nav.loadData(getNavData());
-    }
-}
-window.SLIDESHOW_APP.refreshSidebar = refreshSidebar;
-
-// Router setup
+// Router setup. We no longer have a sidebar, so no `navigation` option
+// is provided. The stepper is updated by the nui-route-change listener
+// above.
 nui.setupRouter({
     container: 'nui-content nui-main',
-    navigation: 'nui-sidebar#main-navigation',
     basePath: '/pages',
     defaultPage: 'projects'
 });
@@ -88,4 +135,7 @@ fetch('/api/voices')
     })
     .catch(() => { window.SLIDESHOW_APP.voices = []; });
 
-initSidebar();
+// Initial stepper render once NUI is ready
+nui.ready().then(() => {
+    updateStepper();
+});

@@ -27,18 +27,39 @@
 <body>
     <nui-loading mode="bar"></nui-loading>
 
-    <nui-app sidebar-width="18rem" content-width="100%">
+    <nui-app content-width="100%">
         <nui-skip-links></nui-skip-links>
 
         <nui-app-header>
             <header>
                 <div slot="left">
-                    <nui-button data-action="toggle-sidebar" variant="icon">
-                        <button type="button" aria-label="Toggle sidebar">
-                            <nui-icon name="menu">☰</nui-icon>
-                        </button>
-                    </nui-button>
-                    <h1>Arena Slideshow</h1>
+                    <!-- Stepper replaces the page title. Each step is a real
+                         button that navigates to the corresponding router
+                         page. The active step is highlighted via variant.
+                         Steps 2 and 3 are disabled until a project is
+                         loaded (controlled by stepper.js). -->
+                    <nav class="stepper" aria-label="Workflow steps">
+                        <nui-button data-step="projects" data-action="goto-step:projects" variant="primary">
+                            <button type="button">
+                                <span class="stepper-num">1</span>
+                                <span>Projects</span>
+                            </button>
+                        </nui-button>
+                        <span class="stepper-sep" aria-hidden="true">—</span>
+                        <nui-button data-step="editor" data-action="goto-step:editor" variant="ghost">
+                            <button type="button" disabled>
+                                <span class="stepper-num">2</span>
+                                <span>Editor</span>
+                            </button>
+                        </nui-button>
+                        <span class="stepper-sep" aria-hidden="true">—</span>
+                        <nui-button data-step="render" data-action="goto-step:render" variant="ghost">
+                            <button type="button" disabled>
+                                <span class="stepper-num">3</span>
+                                <span>Render &amp; Play</span>
+                            </button>
+                        </nui-button>
+                    </nav>
                 </div>
                 <div slot="right">
                     <nui-button data-action="toggle-theme" variant="icon">
@@ -49,10 +70,6 @@
                 </div>
             </header>
         </nui-app-header>
-
-        <nui-sidebar behavior="primary">
-            <nui-link-list mode="tree" id="main-navigation"></nui-link-list>
-        </nui-sidebar>
 
         <nui-content>
             <nui-main></nui-main>

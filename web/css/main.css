@@ -8,6 +8,116 @@
     padding: var(--nui-space);
 }
 
+/* ─── Stepper (header) ───────────────────────────────────────── */
+
+.stepper {
+    display: flex;
+    align-items: center;
+    gap: var(--nui-space-half);
+}
+
+/* Numbered step pill inside the button. Active steps get a filled
+ * background; inactive steps get a border. */
+.stepper-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    background: var(--color-shade3);
+    color: var(--text-color);
+    font-size: var(--font-size-small);
+    font-weight: bold;
+    margin-right: var(--nui-space-half);
+    line-height: 1;
+}
+
+/* When a stepper button is the active step (variant=primary), the
+ * inner <button> has the primary surface — adjust the pill to read
+ * on top of that surface. */
+nui-button[data-step][variant="primary"] .stepper-num,
+nui-button[data-step].is-active .stepper-num {
+    background: var(--color-white);
+    color: var(--color-highlight);
+}
+
+.stepper-sep {
+    color: var(--text-color-dim);
+    font-size: var(--font-size-small);
+    user-select: none;
+}
+
+/* ─── Projects page ──────────────────────────────────────────── */
+
+/* The page is a single column, full-height below the header. */
+.page-projects {
+    height: calc(100vh - 4rem);
+    padding: var(--nui-space);
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: var(--nui-space);
+}
+
+/* Empty state: dropzone fills the available area, the [data-drop]
+ * child inside is the visible dashed target. */
+.projects-empty {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+}
+
+.projects-empty nui-dropzone {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+}
+
+/* Center the visible [data-drop] target both axes. */
+.dropzone-empty-target {
+    margin: auto;
+    max-width: 36rem;
+    /* nui-dropzone's default styling on [data-drop] children already
+     * provides a dashed border, dim text, and a tinted background.
+     * The default padding is fine. */
+}
+
+.dropzone-empty-content {
+    text-align: center;
+}
+
+.dropzone-empty-content h2 {
+    margin: 0 0 var(--nui-space-half) 0;
+}
+
+.dropzone-empty-content p {
+    margin: 0 0 var(--nui-space) 0;
+    color: var(--text-color-dim);
+}
+
+/* Populated state: toolbar at the top, list fills the rest. The
+ * list (nui-list) is position:absolute, inset:0, so its parent
+ * must be positioned and have a height. */
+.projects-list {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--nui-space);
+}
+
+.projects-list-toolbar {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.projects-list-body {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+}
+
 /* ─── Word Highlighting (Playback) ─────────────────────────── */
 
 .words-container {
