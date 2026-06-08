@@ -111,7 +111,8 @@ nui.registerPage('editor', {
                 if (select) {
                     select.addEventListener('nui-change', (e) => {
                         if (!deck.voiceMapping[key]) deck.voiceMapping[key] = {};
-                        deck.voiceMapping[key].voice = e.detail.values[0] || '';
+                        const values = e.detail?.values;
+                        deck.voiceMapping[key].voice = (values && values[0]) || '';
                         saveDeck();
                         renderSlides();
                     });
@@ -133,7 +134,7 @@ nui.registerPage('editor', {
         // ─── Open options dialog ────────────────────────────
         function openOptionsDialog() {
             const tabsHtml = `
-                <nui-tabs>
+                <nui-tabs no-animation>
                     <nav>
                         <button data-tab="voice" aria-controls="opt-voice">Voice Mapping</button>
                         <button data-tab="source" aria-controls="opt-source">Conversation Source</button>
