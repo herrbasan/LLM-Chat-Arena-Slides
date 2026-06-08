@@ -465,6 +465,18 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
             const [action, param] = actionPart.split(':');
 
             if (action === 'generate-deck') {
+                // If the deck already has slides, ask first — this
+                // action silently overwrites them. Voice mapping
+                // and source are preserved; only the generated
+                // slide list is replaced.
+                if ((deck.slides || []).length > 0) {
+                    const ok = await nui.components.dialog.confirm(
+                        'Regenerate slides?',
+                        `This will replace the current ${deck.slides.length} slide${deck.slides.length === 1 ? '' : 's'} with a freshly generated deck. Your source, voice mapping, and manual edits to slide text will be lost. Continue?`,
+                        { placement: 'top' }
+                    );
+                    if (!ok) return;
+                }
                 actionEl.setLoading?.(true);
                 try {
                     const res = await fetch('/api/generate-deck', {
