@@ -5,21 +5,29 @@ nui.registerPage('render', {
     async init(element, params, nui) {
         await nui.ready();
 
-        const projectId = params.id || window.SLIDESHOW_APP.currentProject;
+        let projectId = params.id || window.SLIDESHOW_APP.currentProject;
         if (!projectId) {
             window.location.hash = '#page=projects';
             return;
         }
 
-        let deck;
-        try {
-            const res = await fetch(`/api/projects/${projectId}`);
-            deck = await res.json();
-            window.SLIDESHOW_APP.deck = deck;
-        } catch (err) {
-            nui.components.banner.show({ content: 'Failed to load project', priority: 'alert', autoClose: 5000 });
-            return;
+        let deck = null;
+
+        async function loadProject(id) {
+            try {
+                const res = await fetch(`/api/projects/${id}`);
+                deck = await res.json();
+                window.SLIDESHOW_APP.deck = deck;
+                window.SLIDESHOW_APP.currentProject = id;
+                if (window.SLIDESHOW_APP.updateStepper) window.SLIDESHOW_APP.updateStepper();
+            } catch (err) {
+                nui.components.banner.show({ content: 'Failed to load project', priority: 'alert', autoClose: 5000 });
+                deck = null;
+            }
         }
+
+        await loadProject(projectId);
+        if (!deck) return;
 
         const slideList = element.querySelector('#render-slide-list');
         const playerContent = element.querySelector('#player-slide-content');
@@ -400,6 +408,27 @@ nui.registerPage('render', {
 
         renderSlideList();
         loadSlide(0);
+
+        // Router lifecycle: the page is cached (init() runs once).
+        // The router calls element.show(params) on every navigation,
+        // so we hook it to reload the project when the URL changes.
+        element.show = (newParams) => {
+            if (newParams && newParams.id && newParams.id !== projectId) {
+                projectId = newParams.id;
+                // Reset playback state for the new project
+                audio.pause();
+                audio.src = '';
+                currentSlideIdx = 0;
+                isPlaying = false;
+                renderingSlides = new Set();
+                loadProject(projectId).then(() => {
+                    if (deck) {
+                        renderSlideList();
+                        loadSlide(0);
+                    }
+                });
+            }
+        };
     }
 });
 

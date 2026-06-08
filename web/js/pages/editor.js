@@ -6,31 +6,64 @@ nui.registerPage('editor', {
     async init(element, params, nui) {
         await nui.ready();
 
-        const projectId = params.id;
-        if (!projectId) {
-            window.location.hash = '#page=projects';
-            return;
+        // The router caches this page (init() runs once). The actual
+        // project data depends on params.id, which can change between
+        // visits. The router calls element.show(params) on every
+        // navigation, so we hook it to reload the project.
+        // init() does the first load; show() handles all subsequent
+        // visits.
+        let projectId = params.id;
+        let deck = null;
+        let chatMessages = null;
+        let gateway = null;
+        let chatInput = null;
+        let chatHistory = null;
+
+        async function loadProject(id) {
+            if (!id) {
+                window.location.hash = '#page=projects';
+                return false;
+            }
+            projectId = id;
+            try {
+                const res = await fetch(`/api/projects/${id}`);
+                deck = await res.json();
+                window.SLIDESHOW_APP.currentProject = id;
+                window.SLIDESHOW_APP.deck = deck;
+                if (window.SLIDESHOW_APP.updateStepper) window.SLIDESHOW_APP.updateStepper();
+            } catch (err) {
+                nui.components.banner.show({ content: 'Failed to load project', priority: 'alert', autoClose: 5000 });
+                return false;
+            }
+            // Set the project title in the toolbar
+            const titleEl = element.querySelector('#editor-project-title');
+            if (titleEl) titleEl.textContent = deck.source?.topic || 'Untitled';
+            return true;
         }
 
-        // Load project
-        let deck;
-        try {
-            const res = await fetch(`/api/projects/${projectId}`);
-            deck = await res.json();
-            window.SLIDESHOW_APP.currentProject = projectId;
-            window.SLIDESHOW_APP.deck = deck;
-            if (window.SLIDESHOW_APP.updateStepper) window.SLIDESHOW_APP.updateStepper();
-        } catch (err) {
-            nui.components.banner.show({ content: 'Failed to load project', priority: 'alert', autoClose: 5000 });
-            return;
-        }
+        // First load
+        const firstLoadOk = await loadProject(projectId);
+        if (!firstLoadOk) return; // load failed, bail
 
         const voices = window.SLIDESHOW_APP.voices || [];
         const voiceOptions = voices.map(v => ({ value: v.name || v, label: v.name || v }));
 
-        // ─── Voice Mapping Panel ──────────────────────────────
-        const voicePanel = element.querySelector('#voice-mapping-panel');
-        function renderVoiceMapping() {
+        // ─── Source rendering (used by options dialog) ──────
+        function buildSourceHtml() {
+            const msgs = deck.source?.messages || [];
+            if (msgs.length === 0) {
+                return '<p style="color: var(--text-color-dim);">No source messages.</p>';
+            }
+            return msgs.map((m, i) => `
+                <div class="options-source-msg">
+                    <div class="options-source-speaker">${escapeHtml(m.speaker || 'Unknown')} · Turn ${i + 1}</div>
+                    <div class="options-source-content">${escapeHtml(m.content || m.text || '')}</div>
+                </div>
+            `).join('');
+        }
+
+        // ─── Voice mapping rendering (used by options dialog) ─
+        function buildVoiceMappingHtml() {
             const vm = deck.voiceMapping || {};
             const roles = [
                 { key: 'narrator', label: 'Narrator', defaultVoice: window.SLIDESHOW_CONFIG.DEFAULT_NARRATOR_VOICE, defaultSpeed: 0.95 },
@@ -38,82 +71,97 @@ nui.registerPage('editor', {
                 { key: 'participantB', label: deck.source?.participants?.[1] || 'Participant B', defaultVoice: 'en-GB-Male', defaultSpeed: 1.0 }
             ];
 
-            voicePanel.innerHTML = roles.map(r => {
+            return roles.map(r => {
                 const cfg = vm[r.key] || { voice: r.defaultVoice, speed: r.defaultSpeed };
                 return `
-                    <div style="display: flex; flex-direction: column; gap: var(--nui-space-half);">
-                        <strong>${r.label}</strong>
+                    <div class="options-voice-row">
+                        <strong>${escapeHtml(r.label)}</strong>
                         <nui-select searchable id="voice-${r.key}">
                             <select>
                                 <option value="">Select voice...</option>
-                                ${voiceOptions.map(o => `<option value="${o.value}" ${o.value === cfg.voice ? 'selected' : ''}>${o.label}</option>`).join('')}
+                                ${voiceOptions.map(o => `<option value="${escapeHtml(o.value)}" ${o.value === cfg.voice ? 'selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
                             </select>
                         </nui-select>
-                        <div style="display: flex; align-items: center; gap: var(--nui-space-half);">
-                            <span style="font-size: var(--font-size-xsmall); color: var(--text-color-dim);">Speed</span>
-                            <nui-slider style="flex: 1;">
+                        <div class="options-voice-speed">
+                            <span>Speed</span>
+                            <nui-slider>
                                 <input type="range" id="speed-${r.key}" min="0.5" max="2.0" step="0.05" value="${cfg.speed}">
                             </nui-slider>
-                            <span id="speed-label-${r.key}" style="font-size: var(--font-size-xsmall); min-width: 2.5rem; text-align: right;">${cfg.speed}x</span>
+                            <span id="speed-label-${r.key}">${cfg.speed}x</span>
                         </div>
                     </div>
                 `;
             }).join('');
+        }
 
-            // Bind listeners
-            requestAnimationFrame(() => {
-                roles.forEach(r => {
-                    const select = element.querySelector(`#voice-${r.key}`);
-                    const slider = element.querySelector(`#speed-${r.key}`);
-                    const label = element.querySelector(`#speed-label-${r.key}`);
+        function bindVoiceMappingListeners() {
+            ['narrator', 'participantA', 'participantB'].forEach(key => {
+                const select = document.querySelector(`#voice-${key}`);
+                const slider = document.querySelector(`#speed-${key}`);
+                const label = document.querySelector(`#speed-label-${key}`);
 
-                    if (select) {
-                        select.addEventListener('nui-change', (e) => {
-                            if (!deck.voiceMapping[r.key]) deck.voiceMapping[r.key] = {};
-                            deck.voiceMapping[r.key].voice = e.detail.values[0] || '';
-                            saveDeck();
-                            renderSlides();
-                        });
-                    }
-                    if (slider) {
-                        slider.addEventListener('input', (e) => {
-                            label.textContent = e.target.value + 'x';
-                        });
-                        slider.addEventListener('change', (e) => {
-                            if (!deck.voiceMapping[r.key]) deck.voiceMapping[r.key] = {};
-                            deck.voiceMapping[r.key].speed = parseFloat(e.target.value);
-                            saveDeck();
-                            renderSlides();
-                        });
-                    }
-                });
+                if (select) {
+                    select.addEventListener('nui-change', (e) => {
+                        if (!deck.voiceMapping[key]) deck.voiceMapping[key] = {};
+                        deck.voiceMapping[key].voice = e.detail.values[0] || '';
+                        saveDeck();
+                        renderSlides();
+                    });
+                }
+                if (slider) {
+                    slider.addEventListener('input', (e) => {
+                        if (label) label.textContent = e.target.value + 'x';
+                    });
+                    slider.addEventListener('change', (e) => {
+                        if (!deck.voiceMapping[key]) deck.voiceMapping[key] = {};
+                        deck.voiceMapping[key].speed = parseFloat(e.target.value);
+                        saveDeck();
+                        renderSlides();
+                    });
+                }
             });
         }
 
-        // ─── Conversation Source ──────────────────────────────
-        const sourcePanel = element.querySelector('#conversation-source');
-        function renderSource() {
-            const msgs = deck.source?.messages || [];
-            if (msgs.length === 0) {
-                sourcePanel.innerHTML = '<p style="color: var(--text-color-dim);">No source messages.</p>';
-                return;
-            }
-            sourcePanel.innerHTML = msgs.map((m, i) => `
-                <div style="margin-bottom: var(--nui-space); padding: var(--nui-space-half); background: var(--color-shade1); border-radius: var(--border-radius1);">
-                    <div style="font-weight: bold; color: var(--color-highlight); font-size: var(--font-size-xsmall);">${m.speaker || 'Unknown'} (Turn ${i + 1})</div>
-                    <div style="margin-top: 2px; white-space: pre-wrap; word-break: break-word;">${escapeHtml(m.content || m.text || '')}</div>
-                </div>
-            `).join('');
+        // ─── Open options dialog ────────────────────────────
+        function openOptionsDialog() {
+            const tabsHtml = `
+                <nui-tabs>
+                    <nav>
+                        <button data-tab="voice" aria-controls="opt-voice">Voice Mapping</button>
+                        <button data-tab="source" aria-controls="opt-source">Conversation Source</button>
+                    </nav>
+                    <section id="opt-voice" class="options-pane">
+                        <div class="options-voice-list">${buildVoiceMappingHtml()}</div>
+                    </section>
+                    <section id="opt-source" class="options-pane" hidden>
+                        <div class="options-source">${buildSourceHtml()}</div>
+                    </section>
+                </nui-tabs>
+            `;
+            const { dialog, result } = nui.components.dialog.page(
+                'Options',
+                tabsHtml,
+                {
+                    placement: 'top',
+                    buttons: [
+                        { label: 'Close', value: 'close', type: 'primary' }
+                    ]
+                }
+            );
+            // Wire up voice listeners after the dialog is in the DOM
+            // (page() inserts into body, so querySelector works immediately)
+            requestAnimationFrame(() => bindVoiceMappingListeners());
+            return result;
         }
 
-        // ─── Slide Deck ───────────────────────────────────────
+        // ─── Slide rendering ───────────────────────────────
         const slideDeck = element.querySelector('#slide-deck');
         function renderSlides() {
             const slides = deck.slides || [];
             if (slides.length === 0) {
                 slideDeck.innerHTML = `
                     <nui-card>
-                        <div style="text-align: center; padding: var(--nui-space-double);">
+                        <div class="empty-state">
                             <p>No slides yet.</p>
                             <p>Click "Generate with AI" to create slides from the conversation.</p>
                         </div>
@@ -123,19 +171,17 @@ nui.registerPage('editor', {
             }
 
             slideDeck.innerHTML = slides.map((slide, idx) => {
-                const roleCfg = deck.voiceMapping[slide.speaker] || {};
-                const voiceName = roleCfg.voice || 'default';
                 const isStale = isSlideStale(slide, idx);
                 return `
-                    <nui-card data-slide-index="${idx}" style="${isStale ? 'border-left: 3px solid var(--color-highlight);' : ''}">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--nui-space-half);">
-                            <div>
+                    <nui-card data-slide-index="${idx}" class="${isStale ? 'slide-card-stale' : ''}">
+                        <div class="slide-card-header">
+                            <div class="slide-card-meta">
                                 <nui-badge variant="${slide.type === 'title' ? 'primary' : (slide.type === 'end' ? 'danger' : 'info')}">${slide.type}</nui-badge>
-                                <strong style="margin-left: var(--nui-space-half);">${slide.label || slide.speaker}</strong>
-                            </div>
-                            <div style="display: flex; gap: var(--nui-space-half); align-items: center;">
+                                <strong>${escapeHtml(slide.label || slide.speaker || '')}</strong>
+                                <span class="slide-card-index">#${idx + 1}</span>
                                 ${isStale ? '<nui-badge variant="warning">stale</nui-badge>' : ''}
-                                <span style="font-size: var(--font-size-xsmall); color: var(--text-color-dim);">#${idx + 1}</span>
+                            </div>
+                            <div class="slide-card-actions">
                                 <nui-button variant="icon" data-action="play-slide:${idx}" title="Preview TTS">
                                     <button type="button" aria-label="Preview TTS"><nui-icon name="play"></nui-icon></button>
                                 </nui-button>
@@ -144,7 +190,7 @@ nui.registerPage('editor', {
                                 </nui-button>
                             </div>
                         </div>
-                        <nui-textarea auto-resize>
+                        <nui-textarea auto-resize max-rows="6">
                             <textarea data-slide-text="${idx}" rows="3">${escapeHtml(slide.text || slide.narration || '')}</textarea>
                         </nui-textarea>
                     </nui-card>
@@ -162,7 +208,6 @@ nui.registerPage('editor', {
                         } else {
                             slide.text = e.target.value;
                         }
-                        // Invalidate TTS
                         if (slide.tts) slide.tts = null;
                         saveDeck();
                         renderSlides();
@@ -172,7 +217,7 @@ nui.registerPage('editor', {
         }
 
         function isSlideStale(slide, idx) {
-            if (!slide.tts || !slide.tts.renderHash) return false; // Unrendered, not stale
+            if (!slide.tts || !slide.tts.renderHash) return false;
             const text = slide.text || slide.narration || '';
             const roleCfg = deck.voiceMapping[slide.speaker] || deck.voiceMapping.narrator || {};
             const expectedHash = computeRenderHash(text, roleCfg.voice, roleCfg.speed);
@@ -192,7 +237,7 @@ nui.registerPage('editor', {
             return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
         }
 
-        // ─── Save Deck ────────────────────────────────────────
+        // ─── Save Deck ───────────────────────────────────────
         async function saveDeck() {
             try {
                 await fetch(`/api/projects/${projectId}`, {
@@ -205,13 +250,12 @@ nui.registerPage('editor', {
             }
         }
 
-        // ─── Chat / LLM Integration ───────────────────────────
-        const chatHistory = element.querySelector('#chat-history');
-        const chatInput = element.querySelector('#chat-input');
-        const gateway = new GatewayClient({ baseUrl: window.SLIDESHOW_CONFIG.GATEWAY_URL });
+        // ─── Chat / LLM Integration ──────────────────────────
+        chatHistory = element.querySelector('#chat-history');
+        chatInput = element.querySelector('#chat-input');
+        gateway = new GatewayClient({ baseUrl: window.SLIDESHOW_CONFIG.GATEWAY_URL });
 
-        // Persist chat history across turns (cleared when leaving page)
-        const chatMessages = [
+        chatMessages = [
             {
                 role: 'system',
                 content: `You are the Slideshow Director. You help edit slide decks for TTS narration.
@@ -223,8 +267,7 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
         function addChatMessage(role, text, opts = {}) {
             const div = document.createElement('div');
             div.dataset.chatRole = role;
-            div.style.cssText = `padding: var(--nui-space-half); border-radius: var(--border-radius2); font-size: var(--font-size-small); max-width: 90%; ${role === 'user' ? 'background: var(--color-shade2); align-self: flex-end; margin-left: auto;' : 'background: var(--color-shade1);'}`;
-
+            div.className = `chat-msg chat-msg-${role}`;
             if (role === 'assistant' && !opts.noMarkdown) {
                 const safeText = (text || '').replace(/<\/script/gi, '<\\/script');
                 div.innerHTML = `<nui-markdown><script type="text/markdown">\n${safeText}\n</script></nui-markdown>`;
@@ -267,41 +310,28 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                 for await (const event of gateway.streamChatIterable(requestBody)) {
                     if (event.type === 'delta') {
                         contentBuffer += event.content;
-                        if (md && md.appendChunk) {
-                            md.appendChunk(event.content);
-                        }
+                        if (md && md.appendChunk) md.appendChunk(event.content);
                     } else if (event.type === 'done') {
                         finished = true;
                         if (md && md.endStream) md.endStream();
 
-                        // Append assistant message to history
                         const assistantMsg = { role: 'assistant', content: contentBuffer };
                         if (event.tool_calls && event.tool_calls.length > 0) {
                             assistantMsg.tool_calls = event.tool_calls.map(tc => ({
                                 id: tc.id,
                                 type: tc.type,
-                                function: {
-                                    name: tc.function.name,
-                                    arguments: tc.function.arguments
-                                }
+                                function: { name: tc.function.name, arguments: tc.function.arguments }
                             }));
                         }
                         messages.push(assistantMsg);
 
-                        // Execute tools if requested
                         if (event.tool_calls && event.tool_calls.length > 0) {
                             const toolResults = [];
                             for (const tc of event.tool_calls) {
                                 const result = await executeToolCall(tc);
-                                toolResults.push({
-                                    role: 'tool',
-                                    tool_call_id: tc.id,
-                                    content: result
-                                });
+                                toolResults.push({ role: 'tool', tool_call_id: tc.id, content: result });
                             }
-                            // Show tool call indicator
-                            addChatMessage('assistant', `Executed ${event.tool_calls.length} tool(s). Updating slides...`, { noMarkdown: true });
-                            // Push tool results to history and recurse for model's follow-up
+                            addChatMessage('assistant', `Executed ${event.tool_calls.length} tool(s). Updating slides…`, { noMarkdown: true });
                             messages.push(...toolResults);
                             await runAssistantTurn(messages);
                         }
@@ -343,7 +373,7 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                     type: 'function',
                     function: {
                         name: 'slideshow_insert_slide',
-                        description: 'Insert a slide at a specific position. Use 0 for beginning, deck.slides.length for end.',
+                        description: 'Insert a slide at a specific position.',
                         parameters: {
                             type: 'object',
                             properties: {
@@ -351,7 +381,7 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                                 speaker: { type: 'string' },
                                 label: { type: 'string' },
                                 text: { type: 'string' },
-                                position: { type: 'number', description: '0-based index. Use deck.slides.length to append.' }
+                                position: { type: 'number' }
                             },
                             required: ['type', 'speaker', 'text', 'position']
                         }
@@ -385,12 +415,8 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
             }
 
             try {
-                if (name === 'slideshow_get_source') {
-                    return JSON.stringify(deck.source);
-                }
-                if (name === 'slideshow_get_deck') {
-                    return JSON.stringify({ slides: deck.slides, voiceMapping: deck.voiceMapping });
-                }
+                if (name === 'slideshow_get_source') return JSON.stringify(deck.source);
+                if (name === 'slideshow_get_deck') return JSON.stringify({ slides: deck.slides, voiceMapping: deck.voiceMapping });
                 if (name === 'slideshow_insert_slide') {
                     deck.slides.splice(args.position, 0, {
                         type: args.type,
@@ -427,7 +453,6 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
             const [action, param] = actionPart.split(':');
 
             if (action === 'generate-deck') {
-                // Quick auto-generate via server
                 actionEl.setLoading?.(true);
                 try {
                     const res = await fetch('/api/generate-deck', {
@@ -439,7 +464,6 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                     deck.slides = generated.slides || [];
                     deck.voiceMapping = { ...deck.voiceMapping, ...generated.voiceMapping };
                     await saveDeck();
-                    renderVoiceMapping();
                     renderSlides();
                     nui.components.banner.show({ content: `Generated ${deck.slides.length} slides`, priority: 'success', autoClose: 3000 });
                 } catch (err) {
@@ -449,12 +473,10 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                 }
             }
 
-            if (action === 'chat-send') {
-                sendChat();
-            }
-            if (action === 'goto-render') {
-                window.location.hash = `#page=render&id=${projectId}`;
-            }
+            if (action === 'chat-send') sendChat();
+            if (action === 'goto-render') window.location.hash = `#page=render&id=${projectId}`;
+            if (action === 'back-to-projects') window.location.hash = '#page=projects';
+            if (action === 'open-options') openOptionsDialog();
 
             if (action === 'play-slide') {
                 const idx = parseInt(param);
@@ -479,21 +501,13 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
             if (e.key === 'Enter') sendChat();
         });
 
-        // ─── Realtime TTS Preview (streaming) ─────────────────
+        // ─── TTS Preview ──────────────────────────────────────
         let previewAudio = null;
         let previewMediaSource = null;
 
         async function previewTts(text, voice, speed) {
-            // Clean up previous preview
-            if (previewAudio) {
-                previewAudio.pause();
-                previewAudio.src = '';
-                previewAudio = null;
-            }
-            if (previewMediaSource) {
-                try { previewMediaSource.endOfStream(); } catch {}
-                previewMediaSource = null;
-            }
+            if (previewAudio) { previewAudio.pause(); previewAudio.src = ''; previewAudio = null; }
+            if (previewMediaSource) { try { previewMediaSource.endOfStream(); } catch {} previewMediaSource = null; }
 
             try {
                 const res = await fetch('/api/tts-preview', {
@@ -507,7 +521,6 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                 const canStream = window.MediaSource && MediaSource.isTypeSupported(mime);
 
                 if (canStream) {
-                    // MediaSource streaming — playback starts as soon as first chunk arrives
                     const mediaSource = new MediaSource();
                     previewMediaSource = mediaSource;
                     const url = URL.createObjectURL(mediaSource);
@@ -524,33 +537,25 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                             try {
                                 const { done, value } = await reader.read();
                                 if (done || !mediaSource || mediaSource.readyState === 'closed') {
-                                    if (mediaSource && mediaSource.readyState === 'open') {
-                                        mediaSource.endOfStream();
-                                    }
+                                    if (mediaSource && mediaSource.readyState === 'open') mediaSource.endOfStream();
                                     return;
                                 }
                                 if (sourceBuffer.updating) {
                                     sourceBuffer.addEventListener('updateend', () => pump(), { once: true });
                                 } else {
                                     sourceBuffer.appendBuffer(value);
-                                    // Wait for append to finish before next read
                                     sourceBuffer.addEventListener('updateend', () => pump(), { once: true });
                                 }
                             } catch (e) {
                                 console.error('[TTS Preview] Stream error:', e);
-                                if (mediaSource && mediaSource.readyState === 'open') {
-                                    mediaSource.endOfStream('decode');
-                                }
+                                if (mediaSource && mediaSource.readyState === 'open') mediaSource.endOfStream('decode');
                             }
                         }
                         pump();
                     }, { once: true });
 
-                    previewAudio.addEventListener('ended', () => {
-                        pumping = false;
-                    });
+                    previewAudio.addEventListener('ended', () => { pumping = false; });
                 } else {
-                    // Fallback: wait for full blob (older browsers)
                     const blob = await res.blob();
                     const url = URL.createObjectURL(blob);
                     previewAudio = new Audio(url);
@@ -562,9 +567,27 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
         }
 
         // ─── Initial Render ───────────────────────────────────
-        renderVoiceMapping();
-        renderSource();
         renderSlides();
+
+        // Router lifecycle: the page is cached (init() runs once).
+        // The router calls element.show(params) on every navigation,
+        // so we hook it to reload the project when the URL changes.
+        element.show = (newParams) => {
+            if (newParams && newParams.id && newParams.id !== projectId) {
+                // Clear chat history on project switch
+                if (chatHistory) chatHistory.innerHTML = '';
+                // Reset chat messages for the new project
+                chatMessages = [
+                    {
+                        role: 'system',
+                        content: `You are the Slideshow Director. You help edit slide decks for TTS narration.
+You have tools: slideshow_get_source, slideshow_get_deck, slideshow_insert_slide, slideshow_update_slide.
+When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, expand contractions, no asterisks.`
+                    }
+                ];
+                loadProject(newParams.id).then(ok => { if (ok) renderSlides(); });
+            }
+        };
     }
 });
 

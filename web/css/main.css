@@ -118,6 +118,229 @@ nui-button[data-step].is-active .stepper-num {
     position: relative;
 }
 
+/* ─── Editor page (Stage 2) ──────────────────────────────────── */
+
+/* Two-column layout: slides (flexible) and chat (fixed ~24rem).
+ * Both columns scroll independently; the toolbar at the top of
+ * the slides column stays put. The whole grid fills the viewport
+ * minus the header. */
+.page-editor {
+    height: calc(100vh - 4rem);
+    box-sizing: border-box;
+    padding: var(--nui-space);
+}
+
+.editor-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 24rem;
+    gap: var(--nui-space);
+    height: 100%;
+    min-height: 0;
+}
+
+.editor-slides {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    gap: var(--nui-space);
+}
+
+.editor-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--nui-space);
+    flex-shrink: 0;
+}
+
+.editor-title {
+    margin: 0;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.editor-toolbar-actions {
+    display: flex;
+    gap: var(--nui-space-half);
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.editor-slide-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--nui-space);
+    padding-right: var(--nui-space-quarter);
+}
+
+/* Chat panel: header, scrollable history, sticky input row. */
+.editor-chat {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--color-shade1);
+    border-radius: var(--border-radius2);
+    overflow: hidden;
+}
+
+.editor-chat-header {
+    padding: var(--nui-space) var(--nui-space) 0 var(--nui-space);
+    flex-shrink: 0;
+}
+
+.editor-chat-header h3 {
+    margin: 0;
+}
+
+.editor-chat-history {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--nui-space);
+    display: flex;
+    flex-direction: column;
+    gap: var(--nui-space-half);
+}
+
+.editor-chat-input {
+    display: flex;
+    gap: var(--nui-space-half);
+    padding: var(--nui-space);
+    border-top: 1px solid var(--border-shade1);
+    background: var(--color-base);
+    flex-shrink: 0;
+}
+
+.editor-chat-input nui-input {
+    flex: 1;
+}
+
+/* Slide cards: header with badges, play/delete actions, textarea */
+.slide-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--nui-space-half);
+    gap: var(--nui-space);
+}
+
+.slide-card-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--nui-space-half);
+    min-width: 0;
+    flex: 1;
+    flex-wrap: wrap;
+}
+
+.slide-card-index {
+    font-size: var(--font-size-xsmall);
+    color: var(--text-color-dim);
+}
+
+.slide-card-actions {
+    display: flex;
+    gap: var(--nui-space-half);
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.slide-card-stale {
+    border-left: 3px solid var(--color-highlight);
+}
+
+.empty-state {
+    text-align: center;
+    padding: var(--nui-space-double);
+    color: var(--text-color-dim);
+}
+
+/* Chat messages */
+.chat-msg {
+    padding: var(--nui-space-half);
+    border-radius: var(--border-radius2);
+    font-size: var(--font-size-small);
+    max-width: 90%;
+    word-break: break-word;
+}
+
+.chat-msg-user {
+    background: var(--color-shade2);
+    align-self: flex-end;
+    margin-left: auto;
+}
+
+.chat-msg-assistant {
+    background: var(--color-shade1);
+}
+
+.chat-msg-assistant.tool-exec {
+    background: var(--color-shade3);
+    font-style: italic;
+    color: var(--text-color-dim);
+}
+
+/* Options dialog panes */
+.options-pane {
+    min-height: 12rem;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.options-voice-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nui-space);
+}
+
+.options-voice-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nui-space-half);
+}
+
+.options-voice-speed {
+    display: flex;
+    align-items: center;
+    gap: var(--nui-space-half);
+}
+
+.options-voice-speed nui-slider {
+    flex: 1;
+}
+
+.options-voice-speed > span:last-child {
+    min-width: 2.5rem;
+    text-align: right;
+    font-size: var(--font-size-small);
+    color: var(--text-color-dim);
+}
+
+.options-source-msg {
+    margin-bottom: var(--nui-space);
+    padding: var(--nui-space-half);
+    background: var(--color-shade1);
+    border-radius: var(--border-radius1);
+}
+
+.options-source-speaker {
+    font-weight: bold;
+    color: var(--color-highlight);
+    font-size: var(--font-size-xsmall);
+    margin-bottom: 2px;
+}
+
+.options-source-content {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 /* ─── Word Highlighting (Playback) ─────────────────────────── */
 
 .words-container {
