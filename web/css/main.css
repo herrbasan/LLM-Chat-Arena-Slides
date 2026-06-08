@@ -288,6 +288,24 @@ nui-dialog[mode="page"] .options-source {
     color: var(--text-color-dim);
 }
 
+/* When the chat history has no messages, don't let it take all the
+ * available vertical space — it just looks broken with a huge
+ * empty gap. Cap it at a more reasonable height. */
+.editor-chat-history:empty {
+    flex: 0 0 auto;
+    min-height: 4rem;
+}
+
+.editor-chat-history:empty::before {
+    content: 'AI tool calls and responses will appear here.';
+    display: block;
+    color: var(--text-color-dim);
+    font-size: var(--font-size-small);
+    text-align: center;
+    padding: var(--nui-space);
+    font-style: italic;
+}
+
 /* Chat messages */
 .chat-msg {
     padding: var(--nui-space-half);
