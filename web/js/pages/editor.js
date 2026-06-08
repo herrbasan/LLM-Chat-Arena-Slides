@@ -45,9 +45,6 @@ nui.registerPage('editor', {
         const firstLoadOk = await loadProject(projectId);
         if (!firstLoadOk) return; // load failed, bail
 
-        const voices = window.SLIDESHOW_APP.voices || [];
-        const voiceOptions = voices.map(v => ({ value: v.name || v, label: v.name || v }));
-
         // ─── Source rendering (used by options dialog) ──────
         function buildSourceHtml() {
             const msgs = deck.source?.messages || [];
@@ -72,6 +69,12 @@ nui.registerPage('editor', {
 
         // ─── Voice mapping rendering (used by options dialog) ─
         function buildVoiceMappingHtml() {
+            // Read the latest voices list each time the dialog is built.
+            // The /api/voices fetch in app.js completes asynchronously
+            // and may not be done when the editor first initializes.
+            const voiceOptions = (window.SLIDESHOW_APP.voices || [])
+                .map(v => ({ value: v.name || v, label: v.name || v }));
+
             const vm = deck.voiceMapping || {};
             const roles = [
                 { key: 'narrator', label: 'Narrator', defaultVoice: window.SLIDESHOW_CONFIG.DEFAULT_NARRATOR_VOICE, defaultSpeed: 0.95 },
