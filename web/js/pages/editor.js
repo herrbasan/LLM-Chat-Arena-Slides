@@ -54,12 +54,20 @@ nui.registerPage('editor', {
             if (msgs.length === 0) {
                 return '<p style="color: var(--text-color-dim);">No source messages.</p>';
             }
-            return msgs.map((m, i) => `
-                <div class="options-source-msg">
-                    <div class="options-source-speaker">${escapeHtml(m.speaker || 'Unknown')} · Turn ${i + 1}</div>
-                    <div class="options-source-content">${escapeHtml(m.content || m.text || '')}</div>
-                </div>
-            `).join('');
+            return msgs.map((m, i) => {
+                const isModerator = (m.speaker || '').toLowerCase() === 'moderator';
+                const speakerLabel = escapeHtml(m.speaker || 'Unknown');
+                return `
+                    <div class="options-source-msg ${isModerator ? 'options-source-msg-moderator' : ''}">
+                        <div class="options-source-speaker">
+                            <strong>${speakerLabel}</strong>
+                            ${isModerator ? '<nui-badge variant="primary">setup</nui-badge>' : ''}
+                            <span class="options-source-turn">· Turn ${i + 1}</span>
+                        </div>
+                        <div class="options-source-content">${escapeHtml(m.content || m.text || '')}</div>
+                    </div>
+                `;
+            }).join('');
         }
 
         // ─── Voice mapping rendering (used by options dialog) ─

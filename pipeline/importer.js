@@ -2,6 +2,14 @@
 // Arena Export JSON → Raw Source Data
 // Thin parser — no text cleaning, no slide creation.
 // Text cleaning and slide construction are handled by llm-clean.js.
+//
+// Supports both legacy (v1) and current (v2, mode: "arena") formats.
+// The v2 format consolidated with the normal chat export, so the
+// structure is richer: participants are objects with name/model/role
+// and messages have additional metadata (id, usage, streamStats).
+// The first message is typically a `moderator` system prompt that
+// sets the topic — we keep it in the messages array so downstream
+// tools can decide how to use it.
 
 const fs = require('fs');
 const path = require('path');
@@ -11,19 +19,30 @@ function parseArenaExport(arenaData) {
         throw new Error('Invalid Arena export: missing messages array');
     }
 
-    const participants = (arenaData.participants || []).filter(Boolean);
+    // Normalize participants to a flat array of name strings.
+    // v1: ['glm5-chat', 'minimax-m3-chat']
+    // v2: [{ name: 'glm5-chat', model: 'glm5-chat', role: 'assistant' }, ...]
+    let participants = (arenaData.participants || [])
+        .map(p => {
+            if (typeof p === 'string') return p;
+            if (p && typeof p === 'object' && p.name) return p.name;
+            return null;
+        })
+        .filter(Boolean);
+
+    // Fallback: derive participants from the speaker set in messages.
     if (participants.length === 0) {
         const speakers = new Set();
         for (const m of arenaData.messages) {
             if (m.speaker) speakers.add(m.speaker);
         }
-        participants.push(...speakers);
+        participants = [...speakers];
     }
 
     return {
-        id: arenaData.id || 'unknown',
+        id: arenaData.id || arenaData.chatInfo?.id || 'unknown',
         exportedAt: arenaData.exportedAt || new Date().toISOString(),
-        topic: arenaData.topic || 'Untitled Conversation',
+        topic: arenaData.topic || arenaData.chatInfo?.title || 'Untitled Conversation',
         participants: participants,
         messages: arenaData.messages.map(m => ({
             speaker: m.speaker || m.model || 'Unknown',

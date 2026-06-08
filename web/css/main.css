@@ -329,11 +329,27 @@ nui-button[data-step].is-active .stepper-num {
     border-radius: var(--border-radius1);
 }
 
+/* Moderator (setup) message: subtle highlight so it's easy to
+ * spot — the narrator will read this for the title slide. */
+.options-source-msg-moderator {
+    border-left: 3px solid var(--color-highlight);
+    background: var(--color-shade2);
+}
+
 .options-source-speaker {
-    font-weight: bold;
-    color: var(--color-highlight);
     font-size: var(--font-size-xsmall);
     margin-bottom: 2px;
+    display: flex;
+    align-items: center;
+    gap: var(--nui-space-half);
+}
+
+.options-source-speaker strong {
+    color: var(--color-highlight);
+}
+
+.options-source-turn {
+    color: var(--text-color-dim);
 }
 
 .options-source-content {

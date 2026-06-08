@@ -138,21 +138,32 @@ nui.registerPage('projects', {
                 const text = await file.text();
                 const json = JSON.parse(text);
 
-                if (!json.messages || !json.id) {
+                if (!json.messages || !(json.id || json.chatInfo?.id)) {
                     throw new Error('Invalid Arena Export format');
                 }
 
-                let participants = json.participants || [];
-                if (!participants || participants.length === 0) {
+                // Normalize participants to a flat array of name strings.
+                // v1: ['glm5-chat', 'minimax-m3-chat']
+                // v2: [{ name: 'glm5-chat', model: ..., role: ... }, ...]
+                let participants = (json.participants || [])
+                    .map(p => {
+                        if (typeof p === 'string') return p;
+                        if (p && typeof p === 'object' && p.name) return p.name;
+                        return null;
+                    })
+                    .filter(Boolean);
+
+                // Fallback: derive from message speakers.
+                if (participants.length === 0) {
                     const uniqueSpeakers = [...new Set(json.messages.filter(m => m.speaker).map(m => m.speaker))];
                     participants = uniqueSpeakers;
                 }
 
                 const payload = {
                     source: {
-                        arenaExportId: json.id,
+                        arenaExportId: json.id || json.chatInfo.id,
                         exportedAt: json.exportedAt || new Date().toISOString(),
-                        topic: json.topic || 'Imported Conversation',
+                        topic: json.topic || json.chatInfo?.title || 'Imported Conversation',
                         participants: participants,
                         messages: json.messages
                     },
