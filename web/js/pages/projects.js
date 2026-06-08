@@ -159,13 +159,33 @@ nui.registerPage('projects', {
                     participants = uniqueSpeakers;
                 }
 
+                // Extract the SEED PROMPT (moderator's first message, verbatim
+                // minus the "Topic:" prefix). This is what was actually sent to
+                // participantA — the thing the first model responded to. The
+                // `topic` field on the export is the AI-generated summary title
+                // and must NOT be used for the title slide.
+                const moderatorIdx = json.messages.findIndex(
+                    m => (m.speaker || '').toLowerCase() === 'moderator'
+                );
+                const moderatorMessage = moderatorIdx >= 0 ? json.messages[moderatorIdx] : null;
+                const seedPrompt = moderatorMessage
+                    ? (moderatorMessage.content || '').replace(/^\s*Topic:\s*/i, '').trim()
+                    : null;
+                const seedPromptRaw = moderatorMessage
+                    ? (moderatorMessage.content || '').trim()
+                    : null;
+                const conversationMessages = json.messages.filter((_, i) => i !== moderatorIdx);
+
                 const payload = {
                     source: {
                         arenaExportId: json.id || json.chatInfo.id,
                         exportedAt: json.exportedAt || new Date().toISOString(),
                         topic: json.topic || json.chatInfo?.title || 'Imported Conversation',
+                        seedPrompt: seedPrompt,
+                        seedPromptRaw: seedPromptRaw,
                         participants: participants,
-                        messages: json.messages
+                        // Strip the moderator so the LLM never sees it.
+                        messages: conversationMessages
                     },
                     slides: [],
                     voiceMapping: {

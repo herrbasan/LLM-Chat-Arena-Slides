@@ -256,21 +256,68 @@ app.delete('/api/projects/:id', (req, res) => {
     res.json({ status: 'deleted' });
 });
 
-// ─── LLM Slide Generation ────────────────────────────────────
+// ─── LLM Slide Generation (with progress streaming) ──────────
 
 app.post('/api/generate-deck', async (req, res) => {
-    try {
-        const arenaData = req.body;
-        if (!arenaData || !Array.isArray(arenaData.messages)) {
-            return res.status(400).json({ error: 'Invalid Arena export: missing messages array' });
+    const arenaData = req.body;
+    if (!arenaData || !Array.isArray(arenaData.messages)) {
+        return res.status(400).json({ error: 'Invalid Arena export: missing messages array' });
+    }
+
+    // Honor the Accept header. If client wants SSE, stream progress events.
+    // Otherwise fall back to a single JSON response (legacy behavior).
+    const accept = (req.headers['accept'] || '').toLowerCase();
+    const useSSE = accept.includes('text/event-stream');
+
+    if (!useSSE) {
+        // Legacy JSON mode.
+        try {
+            console.log(`[Server] Generate deck: "${arenaData.topic}", ${arenaData.messages.length} messages`);
+            const source = parseArenaExport(arenaData);
+            const deck = await cleanWithLLM(source, null);
+            res.json(deck);
+        } catch (err) {
+            console.error('[Server] Generate deck failed:', err.message);
+            res.status(500).json({ error: err.message });
         }
-        console.log(`[Server] Generate deck: "${arenaData.topic}", ${arenaData.messages.length} messages`);
+        return;
+    }
+
+    // SSE progress mode.
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no' // Disable proxy buffering (nginx etc.)
+    });
+    // Flush headers immediately so the client sees a connection.
+    if (res.flushHeaders) res.flushHeaders();
+
+    const send = (event, data) => {
+        res.write(`event: ${event}\n`);
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // Periodic keep-alive so proxies don't drop the connection.
+    const heartbeat = setInterval(() => {
+        try { res.write(': heartbeat\n\n'); } catch {}
+    }, 15000);
+
+    try {
+        console.log(`[Server] Generate deck (SSE): "${arenaData.topic}", ${arenaData.messages.length} messages`);
         const source = parseArenaExport(arenaData);
-        const deck = await cleanWithLLM(source, null); // null = don't write files
-        res.json(deck);
+        const deck = await cleanWithLLM(source, null, (stage, message, pct) => {
+            send('progress', { stage, message, pct });
+        });
+        send('done', { slideCount: deck.slides.length });
+        send('result', deck);
+        res.end();
     } catch (err) {
         console.error('[Server] Generate deck failed:', err.message);
-        res.status(500).json({ error: err.message });
+        send('error', { message: err.message });
+        res.end();
+    } finally {
+        clearInterval(heartbeat);
     }
 });
 

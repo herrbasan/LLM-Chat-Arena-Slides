@@ -39,18 +39,44 @@ function parseArenaExport(arenaData) {
         participants = [...speakers];
     }
 
+    // The moderator's first message is the SEED PROMPT — the literal text
+    // sent to participantA. We extract it and expose it as `seedPrompt`.
+    // The `topic` field on the Arena export is the AI-generated summary title
+    // produced AFTER the conversation; do NOT use it for the title slide.
+    //
+    // The moderator message itself is stripped from `messages` so the LLM
+    // never sees it. The title slide is injected deterministically in the
+    // post-processing step of llm-clean.js, using `seedPrompt`.
+    const moderatorIdx = arenaData.messages.findIndex(
+        m => (m.speaker || '').toLowerCase() === 'moderator'
+    );
+    const moderatorMessage = moderatorIdx >= 0 ? arenaData.messages[moderatorIdx] : null;
+    const seedPrompt = moderatorMessage
+        ? (moderatorMessage.content || '').replace(/^\s*Topic:\s*/i, '').trim()
+        : null;
+
     return {
         id: arenaData.id || arenaData.chatInfo?.id || 'unknown',
         exportedAt: arenaData.exportedAt || new Date().toISOString(),
+        // Kept for backward compat / display — but DO NOT use for the title slide.
         topic: arenaData.topic || arenaData.chatInfo?.title || 'Untitled Conversation',
+        // The actual seed prompt that the first model responded to.
+        // Verbatim from messages[0].content, minus the `Topic:` prefix.
+        seedPrompt: seedPrompt,
+        // Raw, unprefixed moderator content including `Topic:` prefix, for
+        // the deterministic title slide to speak verbatim if it wants.
+        seedPromptRaw: moderatorMessage ? (moderatorMessage.content || '').trim() : null,
         participants: participants,
-        messages: arenaData.messages.map(m => ({
-            speaker: m.speaker || m.model || 'Unknown',
-            role: m.role || 'assistant',
-            content: m.content || m.text || '',
-            createdAt: m.createdAt || null,
-            model: m.model || m.speaker || null
-        }))
+        // Messages WITHOUT the moderator. The LLM never sees the moderator.
+        messages: arenaData.messages
+            .filter((_, i) => i !== moderatorIdx)
+            .map(m => ({
+                speaker: m.speaker || m.model || 'Unknown',
+                role: m.role || 'assistant',
+                content: m.content || m.text || '',
+                createdAt: m.createdAt || null,
+                model: m.model || m.speaker || null
+            }))
     };
 }
 

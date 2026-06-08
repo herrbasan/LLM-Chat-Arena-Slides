@@ -69,6 +69,44 @@
 - Always restart the slideshow server after changing `.env`, `ALIGNMENT_VERSION`, or imported server modules.
 - Always restart nVoice after changing `D:\Work\_GIT\nVoice` Python files.
 
+## Arena Conversation Semantics — The Topic Is the Seed
+
+**Fact:** In an Arena conversation, the **first message** (speaker: `moderator`, role: `system`, content prefixed with `Topic:`) is the **seed prompt** — the first thing sent to `participantA`. Everything the first model says is a direct response to that seed. The viewer cannot understand slide 4+ without it.
+
+**What this is NOT:**
+- It is **not** the AI-generated `summary.title` from the Arena export. That title is produced *after* the conversation finishes and summarizes *what was discussed*. The user explicitly flagged this confusion on 2026-06-08: *"The 'title' is a generated title for the conversation, not the topic."*
+- It is **not** `chatInfo.title` either — that's a duplicate of `summary.title` in v2 exports.
+- It is **not** a piece of flavor or setup. It is the literal `content` field of `messages[0]` when `messages[0].speaker === 'moderator'`.
+
+**The moderator is the human's hand, not a system prompt.** Although `messages[0].role` is `system` and `speaker` is `moderator`, the Arena export does **not** inject this into the models as a system prompt. It is sent to the first model as a regular user/assistant turn to seed the conversation. The human user (running the Arena) is the one writing it — it's the only place the human inserts text. **Non-interference is an intentional and important aspect of the experiments:** the human's role is to set the topic, then step back and let the two models respond to each other directly with no further human intervention. Only in rare cases does the human use the moderator role to inject themselves back into a conversation. There are no system prompts.
+
+This means:
+- Treat the moderator message as a **human-authored message**, not model configuration. Stripping or rewriting it as "setup context" loses information the viewer needs.
+- Do **not** model the moderator as a third AI voice. The narrator is the only synthetic voice. The moderator's words are the human's words.
+- The fact that `role: "system"` and `speaker: "moderator"` are present is a quirk of the export format, not a semantic signal. Use the content, not the role, to interpret it.
+
+**Example (real export `reference/arena-house_vs__grooves__being_caugh-…-2026-06-08.json`, messages[0]):**
+```json
+{
+  "speaker": "moderator",
+  "role": "system",
+  "content": "Topic: This is a Chat app that connects two LLM's for autonomous conversation. This is not a task, feel free to be yourself and allow yourself to be curious."
+}
+```
+The first model's opening — *"Hey there! That sounds like a genuinely fun setup. I've always wondered what it would be like to just... talk, without a human steering the conversation."* — is a direct response to "This is a Chat app that connects two LLM's for autonomous conversation… feel free to be yourself and allow yourself to be curious." Without that prompt on screen or in narration, the opener lands as a response to nothing → mental break for the viewer.
+
+**Implications for the opening slides:**
+- The `title` slide should present the **seed prompt content** (or a faithful rendering of it), NOT the AI-generated `summary.title`. The LLM is free to clean it for spoken delivery, but the substance must be present.
+- The `summary.title` / `chatInfo.title` can optionally appear on a separate slide near the end (e.g. as a "the system later summarized this as…" beat) but must not replace the seed.
+- The current `pipeline/llm-clean.js` prompt and the deterministic fallback both use `source.topic`, which is bound to `arenaData.topic` in `pipeline/importer.js` — that is the WRONG field. It should be derived from `messages[0].content` (stripping the `Topic:` prefix) when `messages[0].speaker === 'moderator'`.
+- `pipeline/importer.js` should expose this as a separate field (e.g. `source.seedPrompt`) and `cleanWithLLM()` / the deterministic opener should use it for the `title` slide text and narration.
+
+**Spoken narration of the topic — keep the prefix and the full content.** The seed prompt should be spoken out on the `title` slide *with* the `Topic:` prefix, exactly as the human wrote it. Do not strip the prefix or paraphrase the wording. The narrator's role is to give the listener context — that includes the literal framing word `Topic:` so the listener understands what they are hearing is the prompt, not a description. The opening structure is consistent across nearly all conversations because it produces the best outcomes; the `Topic:` line is the one stable, human-authored part of the deck. Typical title-slide narration reads the seed as: *"Topic: This is a Chat app that connects two LLM's for autonomous conversation. This is not a task, feel free to be yourself and allow yourself to be curious."* — i.e. verbatim from `messages[0].content`, with the prefix kept intact, optionally preceded by a brief framing beat like "The conversation began with this prompt." Do not invent a third AI voice to read the moderator; the narrator reads it.
+
+**Don't make this mistake again:** if a generated deck's title slide references concepts that don't appear in the moderator message, the title is wrong. The seed is upstream of the conversation; the summary is downstream.
+
+**Architectural fix (2026-06-09):** The opening slides (setup + details + title) and the closing slide (end) are now **injected deterministically** in `pipeline/llm-clean.js`'s post-processing — not generated by the LLM. The LLM is no longer responsible for any of: which is the topic, how the opening reads, or what the closing says. It only converts the conversation messages into verbatim conversation slides. The moderator message is stripped in `pipeline/importer.js` so the LLM never sees it; `source.seedPromptRaw` carries the moderator's content (with the `Topic:` prefix) into the title slide text and narration. This was a forced simplification after the LLM repeatedly used the AI summary title and merged 21 messages into 8 slides.
+
 ## NUI Web Components
 
 This project uses the **NUI Web Components** library (`nui_wc2`). This is a high-performance, browser-native UI toolkit that breaks with many common web development patterns. **Any LLM building this MUST internalize these rules before writing HTML or CSS.**

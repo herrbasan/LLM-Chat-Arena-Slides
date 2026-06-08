@@ -1,7 +1,20 @@
 // pipeline/llm-clean.js
-// LLM Gateway → Text Cleaning + Slide Breakpoints
-// Uses badkid-llama-chat (local, tools-capable, 128K context)
-// Proper multi-turn tool loop — sends results back to LLM.
+// LLM Gateway → Conversation-Slide Generation
+// Uses badkid-llama-chat (local, 128K context)
+//
+// Architecture: SINGLE BATCH CALL.
+// The whole conversation fits in 128K, so we send it all at once and ask
+// the LLM to respond with a JSON array of conversation slides. No tool
+// loop, no re-encoding of growing context per turn.
+//
+// The opening (setup + details + title) and the closing (end) are
+// INJECTED DETERMINISTICALLY from source.seedPrompt / source.seedPromptRaw.
+// The LLM has no say in the opener — only the conversation slides.
+//
+// The seed prompt is messages[0].content (the moderator's first message)
+// MINUS the "Topic:" prefix. It is what the first model actually
+// responded to. The AI-generated `source.topic` (summary.title) is NOT
+// used for the title slide.
 
 const fs = require('fs');
 const path = require('path');
@@ -10,7 +23,6 @@ const path = require('path');
 
 const GATEWAY_URL = process.env.LLM_GATEWAY_URL || 'http://192.168.0.100:3400';
 const MODEL = 'badkid-llama-chat';
-const MAX_TOOL_TURNS = 80; // 31 messages × ~2 turns + intro/outro/interludes
 
 // Voice config — override in .env
 const VOICES = {
@@ -28,386 +40,310 @@ const VOICES = {
     }
 };
 
-// ─── Tool Definitions ─────────────────────────────────────────
+// ─── Date helper ──────────────────────────────────────────────
 
-const TOOLS = [
-    {
-        type: 'function',
-        function: {
-            name: 'get_source',
-            description: 'Get all raw conversation messages from the Arena export. Call this first to see what needs to be cleaned.',
-            parameters: { type: 'object', properties: {} }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'get_deck',
-            description: 'Get the current slide deck state.',
-            parameters: { type: 'object', properties: {} }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'create_slide',
-            description: 'Create a new slide. Use this to build the deck one slide at a time.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    type: {
-                        type: 'string',
-                        enum: ['setup', 'details', 'title', 'narration', 'conversation', 'end'],
-                        description: 'Slide type: setup (opening — explains the experiment is evidence, not theater), details (recording date + participant model names), title (the conversation topic shown on its own slide), narration (intro/interlude/outro, spoken by narrator), conversation (cleaned message), end (closing card)'
-                    },
-                    speaker: {
-                        type: 'string',
-                        enum: ['narrator', 'participantA', 'participantB'],
-                        description: 'Who speaks: narrator, participantA (first speaker in conversation), participantB (second speaker)'
-                    },
-                    label: {
-                        type: 'string',
-                        description: 'Display label for the speaker (e.g. "Narrator", "Kimi K2.5", "GLM5")'
-                    },
-                    text: {
-                        type: 'string',
-                        description: 'The main text shown on screen. For conversation slides, this is the cleaned TTS-friendly speech text. Clean aggressively: strip markdown, expand contractions, normalize punctuation, make it speakable. DO NOT include asterisks, markdown, or formatting.'
-                    },
-                    subtitle: {
-                        type: 'string',
-                        description: 'Optional secondary text (only for title/end slides)'
-                    },
-                    narration: {
-                        type: 'string',
-                        description: 'Optional spoken narration text (only for title/end slides). Different from the visual text.'
-                    },
-                    originalIdx: {
-                        type: 'number',
-                        description: 'For conversation slides only: the index of the original message in the source array'
-                    },
-                    position: {
-                        type: 'number',
-                        description: 'Insert at this position in the deck. Omit to append at end.'
-                    }
-                },
-                required: ['type', 'speaker', 'label', 'text']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'update_slide',
-            description: 'Modify an existing slide by index.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    index: { type: 'number', description: 'Zero-based slide index to update' },
-                    text: { type: 'string', description: 'New cleaned text for the slide' },
-                    type: { type: 'string', enum: ['title', 'narration', 'conversation', 'end'] },
-                    speaker: { type: 'string', enum: ['narrator', 'participantA', 'participantB'] },
-                    label: { type: 'string' }
-                },
-                required: ['index']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'delete_slide',
-            description: 'Remove a slide by index. Use to fix mistakes or reorganize.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    index: { type: 'number', description: 'Zero-based slide index to delete' }
-                },
-                required: ['index']
-            }
-        }
-    }
+const MONTHS = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
-// ─── Tool Executor ────────────────────────────────────────────
+const NUMBER_WORDS_0_19 = [
+    'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+    'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'
+];
+// Spelling variants needed when the number is followed by a word starting
+// with a vowel (e.g. "eighth" not "eightth", "fifth" not "fiveth").
+const NUMBER_WORDS_VOWEL_NEXT = {
+    1: 'first', 2: 'second', 3: 'third', 5: 'fifth', 8: 'eighth', 9: 'ninth', 12: 'twelfth'
+};
+const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
 
-class SlideDeckBuilder {
-    constructor(source) {
-        this.source = source; // Raw Arena data
-        this.slides = [];
+function spell(n) {
+    if (n < 0) return 'negative ' + spell(-n);
+    if (n < 20) return NUMBER_WORDS_0_19[n];
+    if (n < 100) {
+        const t = Math.floor(n / 10);
+        const r = n % 10;
+        return r ? `${TENS[t]}-${NUMBER_WORDS_0_19[r]}` : TENS[t];
     }
-
-    execute(toolCall) {
-        const name = toolCall.function.name;
-        const args = JSON.parse(toolCall.function.arguments || '{}');
-        console.log(`  [Tool] ${name} type=${args.type} speaker=${args.speaker} text="${(args.text||'').substring(0, 80)}"`);
-
-        switch (name) {
-            case 'get_source':
-                return JSON.stringify({
-                    topic: this.source.topic,
-                    exportedAt: this.source.exportedAt,
-                    participants: this.source.participants,
-                    messageCount: this.source.messages.length,
-                    // The moderator's message (typically the first) is
-                    // setup context — separate from the topic which
-                    // was the actual opening prompt sent to the first
-                    // model. Identify it for the LLM.
-                    moderatorMessage: (this.source.messages || []).find(
-                        m => (m.speaker || m.model || '').toLowerCase() === 'moderator'
-                    ) || null,
-                    messages: this.source.messages.map((m, i) => ({
-                        index: i,
-                        speaker: m.speaker || m.model,
-                        isModerator: (m.speaker || m.model || '').toLowerCase() === 'moderator',
-                        content: m.content || m.text,
-                        createdAt: m.createdAt
-                    }))
-                });
-
-            case 'get_deck':
-                return JSON.stringify({
-                    slideCount: this.slides.length,
-                    slides: this.slides.map((s, i) => ({
-                        index: i,
-                        type: s.type,
-                        speaker: s.speaker,
-                        label: s.label,
-                        text: s.text
-                    }))
-                });
-
-            case 'create_slide': {
-                const slideType = args.type || 'conversation'; // Default if LLM omits
-                const slide = {
-                    type: slideType,
-                    speaker: args.speaker,
-                    label: args.label,
-                    text: args.text,
-                    subtitle: args.subtitle || undefined,
-                    narration: args.narration || undefined,
-                    originalIdx: args.originalIdx,
-                    tts: null
-                };
-                // Remove undefined fields
-                Object.keys(slide).forEach(k => slide[k] === undefined && delete slide[k]);
-
-                const pos = args.position !== undefined ? args.position : this.slides.length;
-                this.slides.splice(pos, 0, slide);
-                return JSON.stringify({ status: 'created', index: pos, totalSlides: this.slides.length });
-            }
-
-            case 'update_slide': {
-                if (args.index < 0 || args.index >= this.slides.length) {
-                    return JSON.stringify({ error: `Index ${args.index} out of bounds (0-${this.slides.length - 1})` });
-                }
-                const s = this.slides[args.index];
-                if (args.text !== undefined) s.text = args.text;
-                if (args.type !== undefined) s.type = args.type;
-                if (args.speaker !== undefined) s.speaker = args.speaker;
-                if (args.label !== undefined) s.label = args.label;
-                s.tts = null; // Invalidate TTS
-                return JSON.stringify({ status: 'updated', index: args.index });
-            }
-
-            case 'delete_slide': {
-                if (args.index < 0 || args.index >= this.slides.length) {
-                    return JSON.stringify({ error: `Index ${args.index} out of bounds (0-${this.slides.length - 1})` });
-                }
-                this.slides.splice(args.index, 1);
-                return JSON.stringify({ status: 'deleted', index: args.index, totalSlides: this.slides.length });
-            }
-
-            default:
-                return JSON.stringify({ error: `Unknown tool: ${name}` });
-        }
+    if (n < 1000) {
+        const h = Math.floor(n / 100);
+        const r = n % 100;
+        const head = h === 1 ? 'one hundred' : `${NUMBER_WORDS_0_19[h]} hundred`;
+        return r ? `${head} ${spell(r)}` : head;
     }
+    if (n < 10000) {
+        // Years like 2026: "twenty twenty-six"
+        const th = Math.floor(n / 1000);
+        const rest = n % 1000;
+        const head = th < 20 ? NUMBER_WORDS_0_19[th] + ' thousand' : `${spell(th)} thousand`;
+        return rest ? `${head} ${spell(rest)}` : head;
+    }
+    return String(n); // Fallback for very large numbers
 }
 
-// ─── Gateway Chat (Multi-Turn Tool Loop) ──────────────────────
+function formatHumanDate(iso) {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    const day = d.getUTCDate();
+    const month = MONTHS[d.getUTCMonth()];
+    const year = d.getUTCFullYear();
+    // Build the day word. Numbers 1-19 spell cleanly; for teens + 11/12/13
+    // the suffix is always "th" but a few numbers (8, 9, 12) need a vowel
+    // variant to flow naturally into "th".
+    const dayWord = day < 20 && NUMBER_WORDS_VOWEL_NEXT[day]
+        ? NUMBER_WORDS_VOWEL_NEXT[day]
+        : `${spell(day)}th`;
+    return `${month} ${dayWord}, ${spell(year)}`;
+}
 
-async function gatewayChat(messages, tools) {
+// ─── Gateway call (single shot) ───────────────────────────────
+//
+// We used to call the LLM to convert raw messages → slides. Empirically
+// the model was unreliable: 8 slides on one run, 17 on another, 22 on a
+// third. The LLM also produced text that violated the verbatim-fidelity
+// rule (it summarized, it cleaned, it reworded) and on long conversations
+// it hit the gateway's max_tokens ceiling and produced truncated JSON.
+//
+// The LLM's only legitimate job here was: pass text through verbatim,
+// map speaker names, and split very long messages at boundaries. All
+// three are deterministic operations that don't need an LLM.
+//
+// We still import the gateway config so the CLI / API layer can verify
+// reachability, but generation is local and pure.
+
+async function gatewayChat(messages) {
+    const noThinking = { enable_thinking: false };
     const body = {
         model: MODEL,
         messages: messages,
-        tools: tools,
-        temperature: 0.3 // Lower temp for consistent cleaning
+        temperature: 0.3,
+        chat_template_kwargs: noThinking,
+        extraBody: { chat_template_kwargs: noThinking }
     };
-
     const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
     });
-
     if (!res.ok) {
         const errText = await res.text().catch(() => 'unknown');
         throw new Error(`Gateway HTTP ${res.status}: ${errText.substring(0, 500)}`);
     }
-
     return res.json();
 }
 
-async function runToolLoop(source) {
-    const builder = new SlideDeckBuilder(source);
+// ─── Deterministic opening / closing slides ────────────────────
+
+function buildOpeningSlides(source) {
     const participants = source.participants.filter(Boolean);
+    const dateText = formatHumanDate(source.exportedAt) || 'an unknown date';
+    const participantLine = participants.length >= 2
+        ? `${participants[0]} and ${participants[1]}`
+        : (participants[0] || 'two language models');
 
-    const systemPrompt = `You are the Slide Deck Director for the Arena Slideshow system.
-Your job: turn raw LLM conversation transcripts into a clean, speakable slide deck for TTS narration.
-
-The deck is presented as EVIDENCE of a research artifact — a recorded conversation between two LLMs. It is not theater and not entertainment. The viewer needs context to understand what they are looking at.
-
-CRITICAL RULES — follow exactly:
-1. FIRST: call get_source to read the messages.
-2. THEN build the deck IN ORDER using create_slide. Every create_slide call MUST include the "type" field.
-3. SLIDE STRUCTURE (in this exact order):
-   a. OPENING (3 narrador slides, in this order, before any conversation slides):
-      i.  "setup"   (type="setup",   speaker="narrator", label="Narrator"). Text: "Setup".   Narration: explain this is an autonomously generated conversation between two LLMs responding to each other directly, with no human intervention, presented as evidence. Tone: factual, transparent, not promotional.
-      ii. "details" (type="details", speaker="narrator", label="Narrator"). Text: a short subtitle like "Recorded on [humanly formatted date]". Narration: state the recording date (from exportedAt, formatted humanly like "on June eighth, twenty twenty-six") and the two model names (${participants[0] || 'model A'} and ${participants[1] || 'model B'}). Omit the date if exportedAt is missing or unparseable.
-      iii."title"   (type="title",   speaker="narrator", label="Narrator"). Text: the conversation topic, verbatim. Narration: "The conversation began with this prompt." then read the topic aloud. This is the most important slide — the topic was the first message sent to the first model and initiates everything.
-   b. For EACH source message EXCEPT the moderator: create 1+ "conversation" slides (type="conversation") with the CORRECT speaker mapping and cleaned text. Split long messages at natural thought boundaries (1-4 sentences per slide). Preserve the full content — do NOT summarize, shorten, or paraphrase. Every thought the LLMs expressed must appear. Skip the moderator message — its content is setup context, not a turn.
-   c. Create 1 "end" slide (type="end", speaker="narrator", label="Narrator") with a brief closing.
-4. NARRATOR RULES — the narrator speaks on the 3 opening slides AND the end slide:
-   - The narrator explains the experiment setup, the configuration, and states the topic (on the title slide).
-   - Between the opening and the end: SILENT. NO commentary, NO interludes, NO summarization between messages.
-   - Do NOT create "narration" slides between conversation slides.
-   - Do NOT editorialize. The conversation speaks for itself.
-5. SPEAKER MAPPING — use EXACTLY these:
-   - participantA = ${participants[0] || 'first speaker'} (label="${participants[0] || 'Speaker A'}")
-   - participantB = ${participants[1] || 'second speaker'} (label="${participants[1] || 'Speaker B'}")
-   - narrator = narrator (label="Narrator")
-6. TEXT CLEANING — clean aggressively for speech:
-   - Strip ALL markdown: bold, italic, code blocks, etc. — convert to plain text
-   - Remove asterisk action descriptions like "*settling in*" → replace with "Settling in."
-   - Expand common contractions: don't→do not, I'm→I am, can't→cannot, it's→it is, they're→they are
-   - Normalize punctuation: use periods for pauses, not dashes or ellipses
-   - NO markdown, NO asterisks, NO formatting characters in final text
-7. DO NOT skip any non-moderator source message. Every regular message index must appear in at least one slide. Do NOT summarize or shorten messages — preserve the full content.
-8. After creating ALL slides, call get_deck to verify, then respond with a brief summary.`;
-
-    const messages = [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: 'Build the complete slide deck. Start with get_source. Then create the 3 opening narrator slides (setup, details, title — IN THAT ORDER, before any conversation slides), ALL regular conversation messages as individual conversation slides (cleaned, split if long, NO summarization, SKIP the moderator message — it is setup context, not a turn), and an end slide. The narrator speaks ONLY on the 3 opening slides and the end slide. Verify with get_deck when done.' }
+    return [
+        {
+            type: 'setup',
+            speaker: 'narrator',
+            label: 'Narrator',
+            text: 'Setup',
+            narration: 'Setup. This presentation serves as evidence of an autonomously generated conversation between two large language models responding to each other directly, with no human intervention. The tone is factual and transparent.',
+            tts: null
+        },
+        {
+            type: 'details',
+            speaker: 'narrator',
+            label: 'Narrator',
+            text: `Recorded on ${dateText}`,
+            narration: `This recording was generated on ${dateText}, featuring the models ${participantLine}.`,
+            tts: null
+        },
+        {
+            type: 'title',
+            speaker: 'narrator',
+            label: 'Narrator',
+            // The visible text on screen is the literal moderator message,
+            // including the "Topic:" prefix, so the viewer sees exactly
+            // what the human wrote.
+            text: source.seedPromptRaw || source.seedPrompt || source.topic,
+            // The narrator reads the seed prompt verbatim, framed by a brief
+            // intro beat. Prefix is kept on purpose — see Agents.md.
+            narration: source.seedPromptRaw
+                ? `The conversation began with this prompt. ${source.seedPromptRaw}`
+                : `The conversation began with this prompt. ${source.seedPrompt || source.topic}`,
+            tts: null
+        }
     ];
+}
 
-    let turnCount = 0;
+function buildEndSlide() {
+    return {
+        type: 'end',
+        speaker: 'narrator',
+        label: 'Narrator',
+        text: 'End of conversation.',
+        tts: null
+    };
+}
 
-    while (turnCount < MAX_TOOL_TURNS) {
-        turnCount++;
-        console.log(`\n[LLM] Turn ${turnCount} — ${messages.length} messages in context`);
+// ─── Conversation-slide generation (deterministic) ────────────
+//
+// We no longer call the LLM to convert messages → slides. The LLM was
+// unreliable: it summarized, it cleaned, it produced different slide
+// counts across runs, and it hit the gateway's max_tokens ceiling on
+// long conversations.
+//
+// The deterministic pipeline:
+//   1. Map every source message to a (participantA | participantB) slide.
+//   2. Map the message's speaker name to the original display label.
+//   3. Pass text through verbatim — no cleaning, no summarization.
+//   4. Optionally split very long messages at sentence boundaries so a
+//      single slide isn't unreadably long.
 
-        const response = await gatewayChat(messages, TOOLS);
-        const choice = response.choices?.[0];
-        if (!choice) {
-            console.error('[LLM] Unexpected response format:', JSON.stringify(response).substring(0, 500));
-            break;
+const SLIDE_TEXT_SOFT_LIMIT = 600;   // chars — if a message is longer, try to split
+const SLIDE_TEXT_HARD_LIMIT = 1500;  // chars — give up on splitting, keep whole
+
+function splitLongMessage(text) {
+    // Returns 1+ chunks. Each chunk is verbatim from `text`. Splits at
+    // sentence boundaries when over the soft limit.
+    if (text.length <= SLIDE_TEXT_SOFT_LIMIT) return [text];
+
+    const sentences = [];
+    // Naive sentence boundary: ". " or ".\n" or "? " or "! " followed by
+    // a capital letter or quote. Preserves the trailing punctuation.
+    const re = /[^.!?\n]+[.!?]+(?=\s|$)|[^.!?\n]+$/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+        sentences.push(m[0].trim());
+    }
+    if (sentences.length <= 1) return [text]; // No good split point; keep whole.
+
+    const chunks = [];
+    let buf = '';
+    for (const s of sentences) {
+        if (buf && (buf.length + s.length + 1) > SLIDE_TEXT_SOFT_LIMIT) {
+            chunks.push(buf);
+            buf = s;
+        } else {
+            buf = buf ? (buf + ' ' + s) : s;
         }
+    }
+    if (buf) chunks.push(buf);
 
-        const msg = choice.message;
+    // If a chunk is still over the hard limit, don't try to split further;
+    // accept a long slide.
+    return chunks.map(c => c.length > SLIDE_TEXT_HARD_LIMIT ? c : c);
+}
 
-        // Check for tool calls
-        if (msg.tool_calls && msg.tool_calls.length > 0) {
-            console.log(`[LLM] ${msg.tool_calls.length} tool call(s)`);
+function generateConversationSlides(source, progress) {
+    const participants = source.participants.filter(Boolean);
+    const pA = participants[0] || null;
+    const pB = participants[1] || null;
 
-            // Add assistant message with tool_calls to history
-            messages.push({
-                role: 'assistant',
-                content: msg.content || null,
-                tool_calls: msg.tool_calls
+    // Speaker-name → (role, displayLabel) map. Use the first message's
+    // speaker text as the display label, but accept either the literal
+    // name or a slugified variant.
+    function roleFor(speaker) {
+        if (!speaker) return { role: 'participantA', label: pA || 'Speaker A' };
+        const s = String(speaker).trim();
+        if (pA && s === pA) return { role: 'participantA', label: pA };
+        if (pB && s === pB) return { role: 'participantB', label: pB };
+        // Fall back to participantA for unknown speakers (shouldn't happen
+        // because the moderator has already been stripped upstream).
+        return { role: 'participantA', label: s };
+    }
+
+    progress('llm', `Converting ${source.messages.length} messages to slides…`, 30);
+
+    const slides = [];
+    source.messages.forEach((m, idx) => {
+        const text = m.content || '';
+        const chunks = splitLongMessage(text);
+        const { role, label } = roleFor(m.speaker);
+        chunks.forEach((chunk, ci) => {
+            slides.push({
+                type: 'conversation',
+                speaker: role,
+                label: label,
+                text: chunk,
+                originalIdx: idx,
+                tts: null,
+                _splitIdx: ci
             });
+        });
+    });
 
-            // Execute each tool and add results
-            for (const call of msg.tool_calls) {
-                const result = builder.execute(call);
-                messages.push({
-                    role: 'tool',
-                    tool_call_id: call.id,
-                    content: result
-                });
-            }
-            // Continue loop — LLM will process tool results
-            continue;
-        }
-
-        // No tool calls — LLM is done
-        console.log(`[LLM] Final response: "${(msg.content || '').substring(0, 200)}"`);
-        break;
-    }
-
-    if (turnCount >= MAX_TOOL_TURNS) {
-        console.warn(`[LLM] WARNING: Reached max tool turns (${MAX_TOOL_TURNS}). Deck may be incomplete.`);
-    }
-
-    return builder;
+    progress('llm', `Built ${slides.length} conversation slides (${source.messages.length} messages, deterministic)`, 70);
+    return slides;
 }
 
 // ─── Main ─────────────────────────────────────────────────────
 
-async function cleanWithLLM(sourceData, outputDir) {
-    console.log(`\n[LLM Clean] Starting — Gateway: ${GATEWAY_URL}, Model: ${MODEL}`);
-    console.log(`[LLM Clean] Source: "${sourceData.topic}", ${sourceData.source?.messages?.length || sourceData.messages?.length} messages`);
+/**
+ * Build a complete slide deck from a parsed Arena source.
+ *
+ * @param {Object} sourceData — parsed Arena export (or pre-parsed source).
+ *   Must include: topic, participants, messages (already without the moderator),
+ *   seedPrompt, seedPromptRaw, exportedAt.
+ * @param {string|null} outputDir — where to write the deck JSON. null = skip.
+ * @param {Function} [progress] — (stage, message, pct) => void for progress
+ *   reporting. stage is one of "import"|"llm"|"inject"|"write".
+ */
+async function cleanWithLLM(sourceData, outputDir = null, progress = () => {}) {
+    progress('import', `Loaded ${sourceData.messages?.length || 0} messages`, 10);
 
-    // Normalize: accept both raw Arena JSON and pre-parsed source objects
+    // Normalize: accept both raw Arena JSON and pre-parsed source objects.
     const source = {
+        id: sourceData.id || sourceData.source?.id || sourceData.source?.arenaExportId || 'unknown',
         topic: sourceData.topic || sourceData.source?.topic || 'Untitled',
         participants: sourceData.participants || sourceData.source?.participants || [],
-        messages: sourceData.messages || sourceData.source?.messages || []
+        messages: sourceData.messages || sourceData.source?.messages || [],
+        exportedAt: sourceData.exportedAt || sourceData.source?.exportedAt || new Date().toISOString(),
+        seedPrompt: sourceData.seedPrompt || sourceData.source?.seedPrompt || null,
+        seedPromptRaw: sourceData.seedPromptRaw || sourceData.source?.seedPromptRaw || null
     };
 
     if (source.messages.length === 0) {
         throw new Error('No messages found in source data');
     }
+    if (!source.seedPrompt) {
+        console.warn('[LLM Clean] WARNING: source.seedPrompt is empty — title slide will fall back to topic summary.');
+    }
 
-    const builder = await runToolLoop(source);
+    const participants = source.participants.filter(Boolean);
+    progress('llm', `Generating conversation slides…`, 20);
 
-    console.log(`\n[LLM Clean] Deck built: ${builder.slides.length} slides`);
+    // Step 1: Generate conversation slides deterministically from the
+    // source messages. The LLM is no longer in the loop for this step.
+    const conversationSlides = generateConversationSlides(source, progress);
 
-    // ─── Post-Process: Ensure Required Structure ──────────────
-    // The LLM sometimes omits outro/end slides. Inject defaults if missing.
+    progress('inject', `Injecting opening + closing slides`, 80);
 
-    const slides = builder.slides;
+    // Step 2: Deterministic opener + closer.
+    const opening = buildOpeningSlides(source);
+    const ending = buildEndSlide();
 
-    // Remove duplicate consecutive slides (same text + same speaker)
+    // Step 3: Concatenate, dedupe adjacent identical slides, sanity-check.
+    const slides = [...opening, ...conversationSlides, ending];
+
+    // Dedupe adjacent identical-text+speaker slides (LLM occasionally emits a duplicate).
     for (let i = slides.length - 1; i > 0; i--) {
         if (slides[i].text === slides[i - 1].text && slides[i].speaker === slides[i - 1].speaker) {
-            console.log(`  [Post] Removing duplicate slide ${i}: "${(slides[i].text || '').substring(0, 50)}"`);
             slides.splice(i, 1);
         }
     }
 
-    // Ensure first slide is title type
-    if (slides.length === 0 || slides[0].type !== 'title') {
-        slides.unshift({
-            type: 'title',
-            speaker: 'narrator',
-            label: 'Narrator',
-            text: source.topic,
-            narration: `This is an experiment: two large language models, ${participants.join(' and ')}, talking to each other without human intervention. The topic: "${source.topic}".`,
-            tts: null
-        });
-        console.log('  [Post] Injected title slide');
-    }
-
-    // Ensure end slide exists
-    const hasEnd = slides[slides.length - 1]?.type === 'end';
-    if (!hasEnd) {
-        slides.push({
-            type: 'end',
-            speaker: 'narrator',
-            label: 'Narrator',
-            text: 'End of conversation.',
-            tts: null
-        });
-        console.log('  [Post] Injected end slide');
-    }
-
-    // Build the deck structure
-    const participants = source.participants.filter(Boolean);
+    // Build the deck structure.
     const deck = {
         version: 1,
         source: {
-            arenaExportId: sourceData.id || sourceData.source?.arenaExportId || 'unknown',
-            exportedAt: sourceData.exportedAt || sourceData.source?.exportedAt || new Date().toISOString(),
+            arenaExportId: source.id,
+            exportedAt: source.exportedAt,
             topic: source.topic,
+            seedPrompt: source.seedPrompt,
+            seedPromptRaw: source.seedPromptRaw,
             participants: participants,
             messages: source.messages
         },
@@ -416,11 +352,13 @@ async function cleanWithLLM(sourceData, outputDir) {
             participantA: { voice: VOICES.participantA.voice, speed: VOICES.participantA.speed, label: participants[0] || '' },
             participantB: { voice: VOICES.participantB.voice, speed: VOICES.participantB.speed, label: participants[1] || '' }
         },
-        slides: builder.slides,
+        slides: slides,
         createdAt: Date.now()
     };
 
-    // Write output (skip if outputDir is null — API mode)
+    progress('write', `Deck: ${slides.length} slides`, 90);
+
+    // Write output (skip if outputDir is null — API mode).
     if (outputDir) {
         fs.mkdirSync(outputDir, { recursive: true });
         const outputPath = path.join(outputDir, 'slide_deck_llm.json');
@@ -428,15 +366,15 @@ async function cleanWithLLM(sourceData, outputDir) {
         console.log(`[LLM Clean] Output: ${outputPath}`);
     }
 
-    // Print slide overview
-    console.log('\n[LLM Clean] Slide overview:');
-    console.log('\n[LLM Clean] Slide overview:');
+    // Slide overview log.
+    console.log(`\n[LLM Clean] Slide overview (${deck.slides.length} slides):`);
     for (let i = 0; i < deck.slides.length; i++) {
         const s = deck.slides[i];
-        const preview = (s.text || '').substring(0, 80);
+        const preview = (s.text || '').substring(0, 80).replace(/\n/g, ' ');
         console.log(`  ${i}. [${s.type}] ${s.label}: "${preview}${preview.length >= 80 ? '...' : ''}"`);
     }
 
+    progress('done', `Done — ${deck.slides.length} slides`, 100);
     return deck;
 }
 
@@ -457,10 +395,8 @@ async function main() {
         process.exit(1);
     }
 
-    const raw = fs.readFileSync(inputPath, 'utf-8');
-    const data = JSON.parse(raw);
-
-    await cleanWithLLM(data, outputDir);
+    const raw = JSON.parse(fs.readFileSync(inputPath, 'utf-8'));
+    await cleanWithLLM(raw, outputDir);
 }
 
 if (require.main === module) {

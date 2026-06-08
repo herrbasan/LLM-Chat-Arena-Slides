@@ -478,19 +478,86 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                     if (!ok) return;
                 }
                 actionEl.setLoading?.(true);
+
+                // Show a progress banner that we'll update as SSE events arrive.
+                let progressBanner = nui.components.banner.show({
+                    content: 'Generating… 0%',
+                    priority: 'info'
+                });
+
                 try {
                     const res = await fetch('/api/generate-deck', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'text/event-stream'
+                        },
                         body: JSON.stringify(deck.source)
                     });
-                    const generated = await res.json();
+
+                    if (!res.ok) {
+                        const errText = await res.text();
+                        throw new Error('Server returned ' + res.status + ': ' + errText.substring(0, 200));
+                    }
+                    if (!res.body) throw new Error('No response body (no streaming support)');
+
+                    // Parse SSE stream.
+                    const reader = res.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buf = '';
+                    let generated = null;
+                    let lastErr = null;
+
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        buf += decoder.decode(value, { stream: true });
+
+                        // SSE events are separated by blank lines; process complete
+                        // events as they appear.
+                        let idx;
+                        while ((idx = buf.indexOf('\n\n')) !== -1) {
+                            const raw = buf.slice(0, idx);
+                            buf = buf.slice(idx + 2);
+                            const lines = raw.split('\n');
+                            let eventName = 'message';
+                            let dataLines = [];
+                            for (const line of lines) {
+                                if (line.startsWith('event:')) eventName = line.slice(6).trim();
+                                else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+                                // lines starting with ':' are SSE comments (heartbeat) — ignore
+                            }
+                            if (dataLines.length === 0) continue;
+                            const dataStr = dataLines.join('\n');
+                            let data;
+                            try { data = JSON.parse(dataStr); } catch { data = dataStr; }
+
+                            if (eventName === 'progress') {
+                                const pct = Math.round(data.pct || 0);
+                                progressBanner.update(`${data.message || data.stage} (${pct}%)`);
+                            } else if (eventName === 'done') {
+                                // Server has finished; the 'result' event will follow
+                                // (or it already did in the same packet). No action.
+                            } else if (eventName === 'result') {
+                                generated = data;
+                            } else if (eventName === 'error') {
+                                lastErr = new Error(data.message || 'Server reported error');
+                            }
+                        }
+                    }
+
+                    progressBanner.close();
+
+                    if (lastErr) throw lastErr;
+                    if (!generated) throw new Error('Generation finished without a result');
+
                     deck.slides = generated.slides || [];
                     deck.voiceMapping = { ...deck.voiceMapping, ...generated.voiceMapping };
                     await saveDeck();
                     renderSlides();
                     nui.components.banner.show({ content: `Generated ${deck.slides.length} slides`, priority: 'success', autoClose: 3000 });
                 } catch (err) {
+                    try { progressBanner.close(); } catch {}
                     nui.components.banner.show({ content: 'Generation failed: ' + err.message, priority: 'alert', autoClose: 5000 });
                 } finally {
                     actionEl.setLoading?.(false);
