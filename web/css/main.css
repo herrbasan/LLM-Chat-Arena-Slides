@@ -118,6 +118,20 @@ nui-button[data-step].is-active .stepper-num {
     position: relative;
 }
 
+/* ─── Options dialog popover escape ─────────────────────────── */
+
+/* The Options dialog's voice mapping pane uses .options-pane on
+ * the tabpanel. By default <nui-tabs> tabpanels don't have
+ * overflow set, but our nui-theme sets them as display:block.
+ * We don't want overflow on the voice mapping pane because the
+ * nui-select popover (position:absolute, z-index 1000) gets
+ * clipped by overflow ancestors. The source pane IS long
+ * (21+ messages), so we give IT overflow scrolling instead. */
+nui-dialog[mode="page"] .options-source {
+    overflow-y: auto;
+    max-height: 60vh;
+}
+
 /* ─── Editor page (Stage 2) ──────────────────────────────────── */
 
 /* Two-column layout: slides (flexible) and chat (fixed ~24rem).
