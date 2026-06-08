@@ -202,8 +202,8 @@ nui.registerPage('editor', {
                                 </nui-button>
                             </div>
                         </div>
-                        <nui-textarea auto-resize max-rows="6">
-                            <textarea data-slide-text="${idx}" rows="3">${escapeHtml(slide.text || slide.narration || '')}</textarea>
+                        <nui-textarea auto-resize>
+                            <textarea data-slide-text="${idx}" rows="3" style="white-space: pre-wrap;">${escapeHtml(slide.text || slide.narration || '')}</textarea>
                         </nui-textarea>
                     </nui-card>
                 `;

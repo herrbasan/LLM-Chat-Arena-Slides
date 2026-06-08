@@ -57,8 +57,8 @@ const TOOLS = [
                 properties: {
                     type: {
                         type: 'string',
-                        enum: ['title', 'narration', 'conversation', 'end'],
-                        description: 'Slide type: title (opening card), narration (intro/interlude/outro, spoken by narrator), conversation (cleaned message), end (closing card)'
+                        enum: ['setup', 'details', 'title', 'narration', 'conversation', 'end'],
+                        description: 'Slide type: setup (opening — explains the experiment is evidence, not theater), details (recording date + participant model names), title (the conversation topic shown on its own slide), narration (intro/interlude/outro, spoken by narrator), conversation (cleaned message), end (closing card)'
                     },
                     speaker: {
                         type: 'string',
@@ -145,11 +145,20 @@ class SlideDeckBuilder {
             case 'get_source':
                 return JSON.stringify({
                     topic: this.source.topic,
+                    exportedAt: this.source.exportedAt,
                     participants: this.source.participants,
                     messageCount: this.source.messages.length,
+                    // The moderator's message (typically the first) is
+                    // setup context — separate from the topic which
+                    // was the actual opening prompt sent to the first
+                    // model. Identify it for the LLM.
+                    moderatorMessage: (this.source.messages || []).find(
+                        m => (m.speaker || m.model || '').toLowerCase() === 'moderator'
+                    ) || null,
                     messages: this.source.messages.map((m, i) => ({
                         index: i,
                         speaker: m.speaker || m.model,
+                        isModerator: (m.speaker || m.model || '').toLowerCase() === 'moderator',
                         content: m.content || m.text,
                         createdAt: m.createdAt
                     }))
@@ -245,16 +254,21 @@ async function runToolLoop(source) {
     const systemPrompt = `You are the Slide Deck Director for the Arena Slideshow system.
 Your job: turn raw LLM conversation transcripts into a clean, speakable slide deck for TTS narration.
 
+The deck is presented as EVIDENCE of a research artifact — a recorded conversation between two LLMs. It is not theater and not entertainment. The viewer needs context to understand what they are looking at.
+
 CRITICAL RULES — follow exactly:
 1. FIRST: call get_source to read the messages.
 2. THEN build the deck IN ORDER using create_slide. Every create_slide call MUST include the "type" field.
 3. SLIDE STRUCTURE (in this exact order):
-   a. Create 1 "title" slide (type="title", speaker="narrator", label="Narrator"). The text should be the conversation topic. The narration should briefly explain the experiment: two large language models, ${participants[0] || 'model A'} and ${participants[1] || 'model B'}, talking to each other without human intervention — and state the topic.
-   b. For EACH source message: create 1+ "conversation" slides (type="conversation") with the CORRECT speaker mapping and cleaned text. Split long messages at natural thought boundaries (1-4 sentences per slide). Preserve the full content — do NOT summarize, shorten, or paraphrase. Every thought the LLMs expressed must appear.
+   a. OPENING (3 narrador slides, in this order, before any conversation slides):
+      i.  "setup"   (type="setup",   speaker="narrator", label="Narrator"). Text: "Setup".   Narration: explain this is an autonomously generated conversation between two LLMs responding to each other directly, with no human intervention, presented as evidence. Tone: factual, transparent, not promotional.
+      ii. "details" (type="details", speaker="narrator", label="Narrator"). Text: a short subtitle like "Recorded on [humanly formatted date]". Narration: state the recording date (from exportedAt, formatted humanly like "on June eighth, twenty twenty-six") and the two model names (${participants[0] || 'model A'} and ${participants[1] || 'model B'}). Omit the date if exportedAt is missing or unparseable.
+      iii."title"   (type="title",   speaker="narrator", label="Narrator"). Text: the conversation topic, verbatim. Narration: "The conversation began with this prompt." then read the topic aloud. This is the most important slide — the topic was the first message sent to the first model and initiates everything.
+   b. For EACH source message EXCEPT the moderator: create 1+ "conversation" slides (type="conversation") with the CORRECT speaker mapping and cleaned text. Split long messages at natural thought boundaries (1-4 sentences per slide). Preserve the full content — do NOT summarize, shorten, or paraphrase. Every thought the LLMs expressed must appear. Skip the moderator message — its content is setup context, not a turn.
    c. Create 1 "end" slide (type="end", speaker="narrator", label="Narrator") with a brief closing.
-4. NARRATOR RULES — THE NARRATOR SPEAKS EXACTLY ONCE, at the title slide:
-   - The narrator explains the experiment setup and states the topic.
-   - After the title slide, the narrator is SILENT. NO commentary, NO interludes, NO summarization between messages.
+4. NARRATOR RULES — the narrator speaks on the 3 opening slides AND the end slide:
+   - The narrator explains the experiment setup, the configuration, and states the topic (on the title slide).
+   - Between the opening and the end: SILENT. NO commentary, NO interludes, NO summarization between messages.
    - Do NOT create "narration" slides between conversation slides.
    - Do NOT editorialize. The conversation speaks for itself.
 5. SPEAKER MAPPING — use EXACTLY these:
@@ -267,12 +281,12 @@ CRITICAL RULES — follow exactly:
    - Expand common contractions: don't→do not, I'm→I am, can't→cannot, it's→it is, they're→they are
    - Normalize punctuation: use periods for pauses, not dashes or ellipses
    - NO markdown, NO asterisks, NO formatting characters in final text
-7. DO NOT skip any source message. Every message index must appear in at least one slide. Do NOT summarize or shorten messages — preserve the full content.
+7. DO NOT skip any non-moderator source message. Every regular message index must appear in at least one slide. Do NOT summarize or shorten messages — preserve the full content.
 8. After creating ALL slides, call get_deck to verify, then respond with a brief summary.`;
 
     const messages = [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: 'Build the complete slide deck. Start with get_source, then create a title slide (narrator explains the experiment), ALL conversation messages as individual slides (cleaned, split if long, NO summarization), and an end slide. The narrator speaks ONLY on the title slide — NO narration between messages. Verify with get_deck when done.' }
+        { role: 'user', content: 'Build the complete slide deck. Start with get_source. Then create the 3 opening narrator slides (setup, details, title — IN THAT ORDER, before any conversation slides), ALL regular conversation messages as individual conversation slides (cleaned, split if long, NO summarization, SKIP the moderator message — it is setup context, not a turn), and an end slide. The narrator speaks ONLY on the 3 opening slides and the end slide. Verify with get_deck when done.' }
     ];
 
     let turnCount = 0;
