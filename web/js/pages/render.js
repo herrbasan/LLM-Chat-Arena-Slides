@@ -86,34 +86,44 @@ nui.registerPage('render', {
             const counts = { fresh: 0, stale: 0, unrendered: 0, rendering: renderingSlides.size };
             slides.forEach(s => { counts[computeStaleness(s)]++; });
 
+            // Compact status indicator: a small colored dot + label. Used in
+            // the Render card and per-row on the Slides card. Inline span with
+            // a CSS variable for the dot color so we don't need a NUI badge.
+            const dotColor = {
+                fresh: 'var(--color-highlight)',
+                stale: '#d4a017',
+                unrendered: 'var(--text-color-dim)',
+                rendering: 'var(--text-color-dim)'
+            };
+            const statusLabel = {
+                fresh: 'ready',
+                stale: 'stale',
+                unrendered: 'unrendered',
+                rendering: 'rendering…'
+            };
+            const statusDot = (s) => `<span style="display: inline-flex; align-items: center; gap: 4px; font-size: var(--font-size-xsmall); color: var(--text-color-dim);">
+                <span style="width: 6px; height: 6px; border-radius: 50%; background: ${dotColor[s]}; display: inline-block; flex-shrink: 0; ${s === 'rendering' ? 'opacity: 0.5;' : ''}"></span>
+                <span>${counts[s]} ${statusLabel[s]}</span>
+            </span>`;
+
             renderStatus.innerHTML = `
-                <div style="display: flex; gap: var(--nui-space); font-size: var(--font-size-small); flex-wrap: wrap;">
-                    <span><nui-badge variant="success">${counts.fresh}</nui-badge> ready</span>
-                    <span><nui-badge variant="warning">${counts.stale}</nui-badge> stale</span>
-                    <span><nui-badge>${counts.unrendered}</nui-badge> unrendered</span>
-                    ${counts.rendering > 0 ? `<span><nui-badge>${counts.rendering}</nui-badge> rendering</span>` : ''}
+                <div style="display: flex; gap: var(--nui-space); flex-wrap: wrap;">
+                    ${counts.fresh ? statusDot('fresh') : ''}
+                    ${counts.stale ? statusDot('stale') : ''}
+                    ${counts.unrendered ? statusDot('unrendered') : ''}
+                    ${counts.rendering ? statusDot('rendering') : ''}
+                    ${(counts.fresh + counts.stale + counts.unrendered + counts.rendering) === 0 ? '<span style="color: var(--text-color-dim); font-size: var(--font-size-xsmall);">no slides</span>' : ''}
                 </div>
             `;
 
             slideList.innerHTML = slides.map((slide, idx) => {
                 const isRendering = renderingSlides.has(idx);
                 const status = isRendering ? 'rendering' : computeStaleness(slide);
-                const badgeMap = {
-                    fresh: '<nui-badge variant="success">ready</nui-badge>',
-                    stale: '<nui-badge variant="warning">stale</nui-badge>',
-                    unrendered: '<nui-badge>unrendered</nui-badge>',
-                    rendering: '<nui-badge style="opacity:0.6">rendering...</nui-badge>'
-                };
                 return `
-                    <div data-slide-idx="${idx}" style="padding: var(--nui-space-half); border-radius: var(--border-radius1); ${idx === currentSlideIdx ? 'background: var(--color-shade2);' : ''} ${status !== 'fresh' && !isRendering ? 'opacity: 0.7;' : ''}">
-                        <div style="display: flex; justify-content: space-between; align-items: center; gap: var(--nui-space-half);">
-                            <span style="font-size: var(--font-size-small); font-weight: bold; cursor: pointer; flex: 1;" data-slide-idx="${idx}">${slide.label || slide.speaker} #${idx + 1}</span>
-                            ${badgeMap[status]}
-                            ${!isRendering ? `<nui-button variant="icon" data-action="render-slide:${idx}" style="flex-shrink: 0;" title="Render this slide"><button type="button"><nui-icon name="play"></nui-icon></button></nui-button>` : ''}
-                        </div>
-                        <div style="font-size: var(--font-size-xsmall); color: var(--text-color-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                            ${escapeHtml((slide.text || slide.narration || '').substring(0, 60))}
-                        </div>
+                    <div data-slide-idx="${idx}" style="display: flex; align-items: center; gap: var(--nui-space-half); padding: 4px var(--nui-space-half); border-radius: var(--border-radius1); ${idx === currentSlideIdx ? 'background: var(--color-shade2);' : ''} ${status !== 'fresh' && !isRendering ? 'opacity: 0.6;' : ''} cursor: pointer;">
+                        <span style="width: 6px; height: 6px; border-radius: 50%; background: ${dotColor[status]}; display: inline-block; flex-shrink: 0; ${status === 'rendering' ? 'opacity: 0.5;' : ''}" title="${statusLabel[status]}" data-slide-idx="${idx}"></span>
+                        <span style="font-size: var(--font-size-small); font-weight: 500; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" data-slide-idx="${idx}">${slide.label || slide.speaker} <span style="color: var(--text-color-dim); font-weight: 400;">#${idx + 1}</span></span>
+                        ${!isRendering ? `<nui-button variant="icon" data-action="render-slide:${idx}" style="flex-shrink: 0; width: 1.75rem; height: 1.75rem;" title="Render this slide"><button type="button" aria-label="Render slide ${idx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button>` : ''}
                     </div>
                 `;
             }).join('');
