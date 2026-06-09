@@ -754,6 +754,22 @@ app.post('/api/tts-preview', async (req, res) => {
     }
 });
 
+// In development, force-revalidate our own JS/CSS/HTML so edits are picked
+// up on the next page load without manually clearing the browser cache.
+// NUI library code under /nui/ and rendered audio under /cache/ are
+// left to the browser's default caching (they don't change between
+// server restarts unless the underlying files change). Audio files are
+// content-addressed by render hash, so a stale cache is harmless.
+if (process.env.NODE_ENV !== 'production') {
+    app.use((req, res, next) => {
+        const p = req.path;
+        if (p.startsWith('/js/') || p.startsWith('/css/') || p.startsWith('/pages/') || p === '/' || p === '/index.html') {
+            res.setHeader('Cache-Control', 'no-store, must-revalidate');
+        }
+        next();
+    });
+}
+
 // Serve the static web directory (NUI-based management UI)
 app.use(express.static(path.join(__dirname, '../web')));
 
