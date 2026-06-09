@@ -2,8 +2,16 @@ node_modules/
 
 # Local service configuration
 server/.env
+server/.env.local
 
 # Runtime project data and generated render artifacts
 server/data/
 server/slideshows.jsonl
 pipeline/output/
+
+# Root-level archive (kept on disk, not tracked). Files we want to
+# preserve locally but not publish (e.g. the old `client/` attempt
+# that was superseded by `web/`). The leading slash means this only
+# matches `_Archive/` at the repo root — `docs/_Archive/` is still
+# tracked and ships with the repo.
+/_Archive/
