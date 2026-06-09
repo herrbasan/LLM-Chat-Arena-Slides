@@ -184,14 +184,22 @@ nui.registerPage('editor', {
 
             slideDeck.innerHTML = slides.map((slide, idx) => {
                 const isStale = isSlideStale(slide, idx);
+                // Status dot mirrors the render & play page:
+                // --color-highlight for fresh, #d4a017 for stale. The
+                // nui-badge was noisy on a 58-slide deck.
+                const statusDot = isStale
+                    ? '<span style="width: 8px; height: 8px; border-radius: 50%; background: #d4a017; display: inline-block; flex-shrink: 0; box-shadow: 0 0 0 1px var(--border-shade2);" title="stale: text changed since last render"></span>'
+                    : (slide.tts?.renderHash
+                        ? '<span style="width: 8px; height: 8px; border-radius: 50%; background: var(--color-highlight); display: inline-block; flex-shrink: 0; box-shadow: 0 0 0 1px var(--border-shade2);" title="fresh: matches cached render"></span>'
+                        : '<span style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-color-dim); display: inline-block; flex-shrink: 0; box-shadow: 0 0 0 1px var(--border-shade2);" title="unrendered"></span>');
                 return `
                     <nui-card data-slide-index="${idx}" class="${isStale ? 'slide-card-stale' : ''}">
                         <div class="slide-card-header">
                             <div class="slide-card-meta">
+                                ${statusDot}
                                 <nui-badge variant="${slide.type === 'title' ? 'primary' : (slide.type === 'end' ? 'danger' : 'info')}">${slide.type}</nui-badge>
                                 <strong>${escapeHtml(slide.label || slide.speaker || '')}</strong>
                                 <span class="slide-card-index">#${idx + 1}</span>
-                                ${isStale ? '<nui-badge variant="warning">stale</nui-badge>' : ''}
                             </div>
                             <div class="slide-card-actions">
                                 <nui-button variant="icon" data-action="play-slide:${idx}" title="Preview TTS">
@@ -265,7 +273,11 @@ nui.registerPage('editor', {
         // ─── Chat / LLM Integration ──────────────────────────
         chatHistory = element.querySelector('#chat-history');
         chatInput = element.querySelector('#chat-input');
-        gateway = new GatewayClient({ baseUrl: window.SLIDESHOW_CONFIG.GATEWAY_URL });
+        // The GatewayClient proxies via the slideshow server's /api/chat
+        // endpoint (same-origin). The browser never touches the LLM
+        // gateway directly because of CSP default-src 'self'. See
+        // server.js `app.post('/api/chat', ...)` for the proxy.
+        gateway = new GatewayClient();
 
         chatMessages = [
             {
@@ -616,12 +628,11 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                     previewMediaSource = mediaSource;
                     const url = URL.createObjectURL(mediaSource);
                     previewAudio = new Audio(url);
-                    previewAudio.play().catch(() => {});
+                    let pumping = true; // shared with the pump loop + ended listener
 
                     mediaSource.addEventListener('sourceopen', async () => {
                         const sourceBuffer = mediaSource.addSourceBuffer(mime);
                         const reader = res.body.getReader();
-                        let pumping = true;
 
                         async function pump() {
                             if (!pumping) return;
@@ -645,6 +656,7 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                         pump();
                     }, { once: true });
 
+                    previewAudio.play().catch(() => {});
                     previewAudio.addEventListener('ended', () => { pumping = false; });
                 } else {
                     const blob = await res.blob();

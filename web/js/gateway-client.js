@@ -22,13 +22,24 @@ class EventEmitter {
 export class GatewayClient extends EventEmitter {
     constructor(options = {}) {
         super();
-        const base = options.baseUrl || 'http://localhost:3400';
+        // The chat endpoint is a same-origin proxy on the slideshow
+        // server (`POST /api/chat`). The browser can't reach the LLM
+        // gateway directly: the server's CSP locks connect-src to
+        // 'self', and the gateway URL (LLM_GATEWAY_URL) may live on
+        // a host the browser can't see. The server forwards our
+        // request and streams the response back. SSE semantics are
+        // preserved end-to-end so the parser below is unchanged.
+        //
+        // `baseUrl` is kept only for `getModels()`, which still
+        // pokes the gateway directly. It's unused by the editor.
+        const base = options.baseUrl || '';
         this.restUrl = base;
         this.accessKey = options.accessKey || '';
         this.sessionId = options.sessionId || `sess-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
     }
 
     async getModels() {
+        if (!this.restUrl) throw new Error('GatewayClient: no baseUrl configured');
         const headers = this.accessKey ? { 'Authorization': `Bearer ${this.accessKey}` } : {};
         const res = await fetch(`${this.restUrl}/v1/models`, { headers });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -37,7 +48,7 @@ export class GatewayClient extends EventEmitter {
 
     async *streamChatIterable(params) {
         const controller = new AbortController();
-        const url = `${this.restUrl}/v1/chat/completions`;
+        const url = '/api/chat';
         const headers = {
             'Content-Type': 'application/json',
             'Accept': 'text/event-stream'

@@ -330,6 +330,101 @@ app.post('/api/generate-deck', async (req, res) => {
 
 // ─── Cached Render ──────────────────────────────────────────
 
+// ─── LLM Chat Proxy ────────────────────────────────────────
+// Proxies the LLM gateway's OpenAI-compatible /v1/chat/completions
+// endpoint. The browser can't reach the gateway directly because:
+//   1. CSP default-src 'self' blocks cross-origin connect-src
+//   2. The gateway URL (LLM_GATEWAY_URL) may not be reachable from
+//      the browser's network
+// Streaming is end-to-end: we forward the gateway's SSE bytes
+// verbatim so the existing GatewayClient SSE parser works without
+// any changes to its event semantics.
+app.post('/api/chat', async (req, res) => {
+    const gatewayUrl = process.env.LLM_GATEWAY_URL;
+    if (!gatewayUrl) {
+        res.status(500).json({ error: 'LLM_GATEWAY_URL is not configured' });
+        return;
+    }
+
+    // Force stream=true on the wire regardless of what the client
+    // sent; the editor's GatewayClient always wants streaming.
+    const bodyParams = { ...(req.body || {}), stream: true };
+    delete bodyParams.session_id; // server assigns its own
+    const url = `${gatewayUrl.replace(/\/+$/, '')}/v1/chat/completions`;
+
+    const headers = { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' };
+    if (process.env.LLM_GATEWAY_API_KEY) {
+        headers['Authorization'] = `Bearer ${process.env.LLM_GATEWAY_API_KEY}`;
+    }
+
+    // Initial-connect timeout only. Once we're streaming, the
+    // response body drives lifetime; no overall read timeout.
+    const controller = new AbortController();
+    const initialTimeout = setTimeout(() => controller.abort(), 30000);
+
+    let gatewayRes;
+    try {
+        gatewayRes = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(bodyParams),
+            signal: controller.signal
+        });
+    } catch (err) {
+        clearTimeout(initialTimeout);
+        console.error('[Chat Proxy] Gateway unreachable:', err.message);
+        res.status(502).json({ error: 'LLM gateway unreachable: ' + err.message });
+        return;
+    }
+    clearTimeout(initialTimeout);
+
+    if (!gatewayRes.ok) {
+        const errText = await gatewayRes.text();
+        console.error(`[Chat Proxy] Gateway ${gatewayRes.status}: ${errText.substring(0, 500)}`);
+        res.status(gatewayRes.status).json({ error: `Gateway returned ${gatewayRes.status}`, detail: errText.substring(0, 500) });
+        return;
+    }
+
+    // Stream the SSE response through to the client verbatim.
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    });
+    if (res.flushHeaders) res.flushHeaders();
+
+    // Heartbeat keeps proxies from idling out a long stream.
+    const heartbeat = setInterval(() => {
+        try { res.write(': heartbeat\n\n'); } catch {}
+    }, 15000);
+
+    const clientGone = () => {
+        clearInterval(heartbeat);
+        try { gatewayRes.body?.cancel?.(); } catch {}
+    };
+    req.on('close', clientGone);
+    req.on('aborted', clientGone);
+
+    try {
+        const reader = gatewayRes.body.getReader();
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!res.write(value)) {
+                // Backpressure: wait for drain before pulling more.
+                await new Promise(r => res.once('drain', r));
+            }
+        }
+    } catch (err) {
+        console.error('[Chat Proxy] Stream error:', err.message);
+        try { res.write(`event: error\ndata: ${JSON.stringify({ message: err.message })}\n\n`); } catch {}
+    } finally {
+        clearInterval(heartbeat);
+        try { res.end(); } catch {}
+    }
+});
+
 app.post('/api/render-deck/:id', async (req, res) => {
     try {
         const projectId = req.params.id;
@@ -740,8 +835,13 @@ app.post('/api/tts-preview', async (req, res) => {
         const { text, voice, speed } = req.body;
         if (!text) return res.status(400).json({ error: 'Missing text' });
 
+        // Strip *emphasis* markers from the preview text so what the
+        // user hears matches what the deck's rendered TTS will say.
+        // Same rule as getSpokenText in the per-slide render path.
+        const spokenText = String(text).replace(/\*+/g, '');
+
         const ttsUrl = `${process.env.NSPEECH_URL}/tts?` + new URLSearchParams({
-            text: text,
+            text: spokenText,
             voice_name: voice || 'en-US-Male',
             speed: (speed || 1.0).toString(),
             output_format: 'mp3'
@@ -752,12 +852,27 @@ app.post('/api/tts-preview', async (req, res) => {
             return res.status(502).json({ error: `TTS failed: HTTP ${ttsRes.status}` });
         }
 
-        // Stream the response directly to the client so MediaSource can start immediately
+        // Stream the response body to the client so MediaSource can
+        // start playing immediately. fetch().body is a Web ReadableStream
+        // (since Node 18+); we have to read it as chunks and write to
+        // the Node response, since .pipe() doesn't exist on Web streams.
         res.setHeader('Content-Type', 'audio/mpeg');
-        ttsRes.body.pipe(res);
+        const reader = ttsRes.body.getReader();
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (!res.write(value)) {
+                    await new Promise(r => res.once('drain', r));
+                }
+            }
+        } finally {
+            res.end();
+        }
     } catch (err) {
         console.error('[Server] TTS preview failed:', err.message);
-        res.status(500).json({ error: err.message });
+        if (!res.headersSent) res.status(500).json({ error: err.message });
+        else try { res.end(); } catch {}
     }
 });
 
