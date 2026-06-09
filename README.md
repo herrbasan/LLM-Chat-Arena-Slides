@@ -47,11 +47,11 @@ Every video opens with three fixed slides. The narrations are a locked contract 
 
 > "This recording was generated on *[date]*, featuring the models *[Model A]* and *[Model B]*."
 
-**Title** — speaks the seed prompt aloud, verbatim:
+**Title** — speaks the seed prompt aloud, verbatim, with nothing else:
 
-> "The conversation began with this prompt. *[The seed prompt, verbatim, including the `Topic:` prefix.]*"
+> *[The seed prompt, verbatim, including the `Topic:` prefix.]*
 
-The third slide is what cements the verification: the narrator reads the human's own words as the very first content of the video, with the `Topic:` prefix preserved. A viewer can pause, copy the spoken text, and confirm it matches the moderator message in the Arena export byte-for-byte.
+No preamble, no framing beat, no "the conversation began with…" The narrator reads the human's own words as the entire narration of this slide. The on-screen rendering is also distinct from the other slides — no type eyebrow, no speaker label, just the seed prompt itself. A viewer can pause, copy the spoken text, and confirm it matches the moderator message in the Arena export byte-for-byte.
 
 The locked source for these narrations is in [`pipeline/llm-clean.js`](pipeline/llm-clean.js) (`buildOpeningSlides`). Don't change the wording without a deliberate decision — the verification premise depends on the contract being stable.
 

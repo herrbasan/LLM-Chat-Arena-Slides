@@ -168,15 +168,14 @@ function buildOpeningSlides(source) {
             type: 'title',
             speaker: 'narrator',
             label: 'Narrator',
-            // The visible text on screen is the literal moderator message,
-            // including the "Topic:" prefix, so the viewer sees exactly
-            // what the human wrote.
+            // On-screen: the literal moderator message, including the
+            // "Topic:" prefix — the viewer sees exactly what the human
+            // wrote, with no preamble, no speaker label, no eyebrow.
             text: source.seedPromptRaw || source.seedPrompt || source.topic,
-            // The narrator reads the seed prompt verbatim, framed by a brief
-            // intro beat. Prefix is kept on purpose — see Agents.md.
-            narration: source.seedPromptRaw
-                ? `The conversation began with this prompt. ${source.seedPromptRaw}`
-                : `The conversation began with this prompt. ${source.seedPrompt || source.topic}`,
+            // Narrator reads ONLY the seed prompt, verbatim, with the
+            // "Topic:" prefix preserved. No framing beat — the contract
+            // is "just the topic, on a single slide." See Agents.md.
+            narration: source.seedPromptRaw || source.seedPrompt || source.topic,
             tts: null
         }
     ];
