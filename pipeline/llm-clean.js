@@ -149,7 +149,11 @@ function buildOpeningSlides(source) {
             speaker: 'narrator',
             label: 'Narrator',
             text: 'Setup',
-            narration: 'Setup. This presentation serves as evidence of an autonomously generated conversation between two large language models responding to each other directly, with no human intervention. The tone is factual and transparent.',
+            // Setup narration is a locked contract — see the README
+            // ("The Opening Slides" section). It frames the contract for
+            // the rest of the video: no human involvement after the seed
+            // prompt, every word the models' own.
+            narration: "You're about to hear a conversation between two language models. They were given a single prompt \u2014 a topic \u2014 and then left to respond to each other directly, with no further human involvement. What follows is unedited and unsteered. The models chose every word themselves.",
             tts: null
         },
         {

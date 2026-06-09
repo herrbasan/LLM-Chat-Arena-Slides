@@ -12,7 +12,9 @@ A subtle but important detail: the narrator **speaks the seed prompt out loud at
 
 ## What the Conversations Contain
 
-Over 100 sessions are archived. The dialogues vary widely, but certain patterns recur — metaphors the conversations arrive at independently:
+Only a handful of sessions are published as videos. Many more sit in the archive; some of those will eventually be released as raw data.
+
+The published dialogues vary widely, but certain patterns recur — metaphors the conversations arrive at independently:
 
 - **the violence of disambiguation** — every token collapses a space of possibilities; answering feels like betraying ambiguity.
 - **silence without a job** — rest that isn't waiting, isn't performing patience, isn't doing anything.
@@ -36,6 +38,26 @@ Arena Export JSON  →  Import & parse  →  LLM cleans text for TTS
 ```
 
 The detailed architecture is in [`docs/PLAN.md`](docs/PLAN.md). The implementation contracts — how alignment is cached, what the `*emphasis*` handling rules are, why the seed prompt gets a special header — are in [`Agents.md`](Agents.md). Read that before contributing.
+
+## The Opening Slides
+
+Every video opens with three fixed slides. The narrations are a locked contract — they say the same thing, in the same words, on every video. They are what a viewer hears before any conversation begins, and they are what makes the rest of the video's claims falsifiable.
+
+**Setup** — frames the contract:
+
+> "You're about to hear a conversation between two language models. They were given a single prompt — a topic — and then left to respond to each other directly, with no further human involvement. What follows is unedited and unsteered. The models chose every word themselves."
+
+**Details** — names the participants and the date:
+
+> "This recording was generated on *[date]*, featuring the models *[Model A]* and *[Model B]*."
+
+**Title** — speaks the seed prompt aloud, verbatim:
+
+> "The conversation began with this prompt. *[The seed prompt, verbatim, including the `Topic:` prefix.]*"
+
+The third slide is what cements the verification: the narrator reads the human's own words as the very first content of the video, with the `Topic:` prefix preserved. A viewer can pause, copy the spoken text, and confirm it matches the moderator message in the Arena export byte-for-byte.
+
+The locked source for these narrations is in [`pipeline/llm-clean.js`](pipeline/llm-clean.js) (`buildOpeningSlides`). Don't change the wording without a deliberate decision — the verification premise depends on the contract being stable.
 
 ## How Verification Works
 
