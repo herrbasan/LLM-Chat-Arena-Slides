@@ -13,10 +13,16 @@ const ALIGNMENT_VERSION = 6;
 // ─── Helpers ──────────────────────────────────────────────────
 
 function getSlideText(slide) {
+    let text;
     if (slide.type === 'title' || slide.type === 'end') {
-        return slide.narration || slide.text || '';
+        text = slide.narration || slide.text || '';
+    } else {
+        text = slide.text || slide.narration || '';
     }
-    return slide.text || slide.narration || '';
+    // Strip markdown *emphasis* markers from spoken text. nVoice alignment
+    // uses this as endpoint context and would otherwise see literal
+    // "asterisk" tokens. Mirrors the server-side fix in server/server.js.
+    return text ? text.toString().replace(/\*+/g, '') : text;
 }
 
 function normalizeWord(w) {

@@ -13,10 +13,16 @@ const NSPEECH_URL = process.env.NSPEECH_URL || 'http://192.168.0.145:2233';
 
 function getSlideText(slide) {
     // Use the most appropriate text field for speech
+    let text;
     if (slide.type === 'title' || slide.type === 'end') {
-        return slide.narration || slide.text || '';
+        text = slide.narration || slide.text || '';
+    } else {
+        text = slide.text || slide.narration || '';
     }
-    return slide.text || slide.narration || '';
+    // Strip markdown *emphasis* markers from spoken text. nSpeech would
+    // otherwise speak "asterisk" literally. Mirrors the server-side fix
+    // in server/server.js — keep them in sync.
+    return text ? text.toString().replace(/\*+/g, '') : text;
 }
 
 function getVoiceConfig(slide, voiceMapping) {

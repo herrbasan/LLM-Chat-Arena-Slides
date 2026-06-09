@@ -12,6 +12,8 @@ nui.registerPage('render', {
         }
 
         let deck = null;
+        let splitIndexCache = null;
+        let splitIndexDeckRef = null;
 
         async function loadProject(id) {
             try {
@@ -19,6 +21,7 @@ nui.registerPage('render', {
                 deck = await res.json();
                 window.SLIDESHOW_APP.deck = deck;
                 window.SLIDESHOW_APP.currentProject = id;
+                invalidateSplitIndexCache();
                 if (window.SLIDESHOW_APP.updateStepper) window.SLIDESHOW_APP.updateStepper();
             } catch (err) {
                 nui.components.banner.show({ content: 'Failed to load project', priority: 'alert', autoClose: 5000 });
@@ -55,10 +58,72 @@ nui.registerPage('render', {
         }
 
         function getSpokenText(slide) {
+            let text;
             if (slide.type === 'title' || slide.type === 'end') {
-                return slide.narration || slide.text || '';
+                text = slide.narration || slide.text || '';
+            } else {
+                text = slide.text || slide.narration || '';
             }
-            return slide.text || slide.narration || '';
+            return stripEmphasisForSpeech(text);
+        }
+
+        // Markdown-style *emphasis* markers (single or multiple asterisks)
+        // are spoken by nSpeech as literal "asterisk" tokens. Strip them
+        // from the SPOKEN text only; on-screen slide.text keeps the marks.
+        function stripEmphasisForSpeech(s) {
+            if (!s) return s;
+            return s.toString().replace(/\*+/g, '');
+        }
+
+        // Memoized map of slide-idx → split-position-within-message.
+        // Walked once per deck-instance; cleared on deck mutation.
+        function getSplitIndices() {
+            const deckRef = deck;
+            if (splitIndexCache && splitIndexDeckRef === deckRef) return splitIndexCache;
+            const map = new Map();
+            const seen = new Map(); // originalIdx → running count
+            (deckRef?.slides || []).forEach((slide, idx) => {
+                if (slide.type !== 'conversation' && slide.type !== 'narration') return;
+                if (slide.originalIdx == null) return;
+                const count = seen.get(slide.originalIdx) || 0;
+                map.set(idx, count);
+                seen.set(slide.originalIdx, count + 1);
+            });
+            splitIndexCache = map;
+            splitIndexDeckRef = deckRef;
+            return map;
+        }
+        function invalidateSplitIndexCache() {
+            splitIndexCache = null;
+            splitIndexDeckRef = null;
+        }
+
+        function formatTimestamp(iso) {
+            if (!iso) return null;
+            const d = new Date(iso);
+            if (isNaN(d.getTime())) return null;
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const date = `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+            const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+            return `${date} · ${time}`;
+        }
+
+        // Build the header label for a slide. For setup/details/title/end,
+        // return the type label verbatim. For conversation/narration slides
+        // (which may be split from a single source message), return
+        // "<originalIdx+1>.<splitIdx> <speaker>" so the list and player
+        // header share a stable numeric identity.
+        function buildHeaderLabel(slide, idx) {
+            if (slide.type !== 'conversation' && slide.type !== 'narration') {
+                return slide.type.charAt(0).toUpperCase() + slide.type.slice(1);
+            }
+            if (slide.originalIdx == null) {
+                return slide.label || slide.speaker || `Slide ${idx + 1}`;
+            }
+            const major = slide.originalIdx + 1;
+            const splitIdx = getSplitIndices().get(idx) || 0;
+            const who = slide.label || slide.speaker || '';
+            return `${major}.${splitIdx} ${who}`.trim();
         }
 
         function computeRenderHash(text, voice, speed) {
@@ -120,10 +185,11 @@ nui.registerPage('render', {
                 const isRendering = renderingSlides.has(idx);
                 const status = isRendering ? 'rendering' : computeStaleness(slide);
                 const isSelected = idx === currentSlideIdx;
+                const headerLabel = buildHeaderLabel(slide, idx);
                 return `
                     <div data-slide-idx="${idx}" style="display: flex; align-items: center; gap: var(--nui-space-half); padding: 4px var(--nui-space-half) 4px calc(var(--nui-space-half) + 4px); border-radius: var(--border-radius1); border-left: 3px solid ${isSelected ? 'var(--color-highlight)' : 'transparent'}; background: ${isSelected ? 'var(--color-shade2)' : 'transparent'}; ${status !== 'fresh' && !isRendering ? 'opacity: 0.5;' : ''} cursor: pointer;">
                         <span style="width: 8px; height: 8px; border-radius: 50%; background: ${dotColor[status]}; display: inline-block; flex-shrink: 0; ${status === 'rendering' ? 'opacity: 0.5;' : ''} box-shadow: 0 0 0 1px var(--border-shade2);" title="${statusLabel[status]}" data-slide-idx="${idx}"></span>
-                        <span style="font-size: var(--font-size-small); font-weight: ${isSelected ? '600' : '500'}; color: ${isSelected ? 'var(--text-color)' : 'var(--text-color-dim)'}; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" data-slide-idx="${idx}" title="${slide.label || slide.speaker} #${idx + 1} (${statusLabel[status]})">${slide.label || slide.speaker} <span style="color: var(--text-color-dim); font-weight: 400;">#${idx + 1}</span></span>
+                        <span style="font-size: var(--font-size-small); font-weight: ${isSelected ? '600' : '500'}; color: ${isSelected ? 'var(--text-color)' : 'var(--text-color-dim)'}; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" data-slide-idx="${idx}" title="${escapeHtml(headerLabel)} (${statusLabel[status]})">${escapeHtml(headerLabel)}</span>
                         ${!isRendering ? `<nui-button variant="icon" data-action="render-slide:${idx}" style="flex-shrink: 0; width: 1.75rem; height: 1.75rem;" title="Render this slide"><button type="button" aria-label="Render slide ${idx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button>` : ''}
                     </div>
                 `;
@@ -151,6 +217,7 @@ nui.registerPage('render', {
                 const { slide } = await res.json();
                 deck.slides[idx] = slide;
                 window.SLIDESHOW_APP.deck = deck;
+                invalidateSplitIndexCache();
             } catch (err) {
                 nui.components.banner.show({ content: `Slide ${idx + 1} render failed: ${err.message}`, priority: 'alert', autoClose: 5000 });
             } finally {
@@ -183,6 +250,7 @@ nui.registerPage('render', {
                     const { slide } = await res.json();
                     deck.slides[idx] = slide;
                     window.SLIDESHOW_APP.deck = deck;
+                    invalidateSplitIndexCache();
                 } catch (err) {
                     failed++;
                 }
@@ -228,9 +296,19 @@ nui.registerPage('render', {
             }
 
             // Render slide content
+            const headerLabel = buildHeaderLabel(slide, idx);
+            const createdAt = (slide.type === 'conversation' && slide.originalIdx != null)
+                ? deck?.source?.messages?.[slide.originalIdx]?.createdAt
+                : null;
+            const timestamp = formatTimestamp(createdAt);
             let html = '';
             html += `<div style="font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: var(--text-color-dim); margin-bottom: 8px;">${slide.type}</div>`;
-            html += `<div style="font-size: 14px; font-weight: bold; color: var(--color-highlight); margin-bottom: 4px;">${slide.label || slide.speaker}</div>`;
+            html += `<div style="display: flex; align-items: baseline; gap: var(--nui-space); margin-bottom: 4px;">`;
+            html += `<div style="font-size: 14px; font-weight: bold; color: var(--color-highlight);">${escapeHtml(headerLabel)}</div>`;
+            if (timestamp) {
+                html += `<div style="font-size: var(--font-size-xsmall); color: var(--text-color-dim);">${escapeHtml(timestamp)}</div>`;
+            }
+            html += `</div>`;
 
             if (slide.type === 'title' || slide.type === 'end') {
                 html += `<div style="font-size: 36px; font-weight: bold; margin-bottom: 8px; line-height: 1.2;">${escapeHtml(slide.text || '')}</div>`;
@@ -269,7 +347,7 @@ nui.registerPage('render', {
             }
 
             if (!text) return '';
-            const textWords = text.split(/\s+/).filter(w => w.length > 0);
+            const textWords = stripEmphasisForSpeech(text).split(/\s+/).filter(w => w.length > 0);
             return textWords.map((w, i) => {
                 return `<span class="word future">${escapeHtml(w)}</span> `;
             }).join('');

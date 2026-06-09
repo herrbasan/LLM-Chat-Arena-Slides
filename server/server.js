@@ -88,10 +88,17 @@ function computeRenderHash(text, voice, speed) {
 }
 
 function getSpokenText(slide) {
+    let text;
     if (slide.type === 'title' || slide.type === 'end') {
-        return slide.narration || slide.text || '';
+        text = slide.narration || slide.text || '';
+    } else {
+        text = slide.text || slide.narration || '';
     }
-    return slide.text || slide.narration || '';
+    // Markdown-style *emphasis* markers are spoken by nSpeech as literal
+    // "asterisk" tokens. Strip them from the SPOKEN text only; on-screen
+    // slide.text keeps the marks. Mirrors stripEmphasisForSpeech in
+    // web/js/pages/render.js — keep the two in sync.
+    return text ? text.toString().replace(/\*+/g, '') : text;
 }
 
 function normalizeAlignedWord(word) {
