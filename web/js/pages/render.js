@@ -119,10 +119,11 @@ nui.registerPage('render', {
             slideList.innerHTML = slides.map((slide, idx) => {
                 const isRendering = renderingSlides.has(idx);
                 const status = isRendering ? 'rendering' : computeStaleness(slide);
+                const isSelected = idx === currentSlideIdx;
                 return `
-                    <div data-slide-idx="${idx}" style="display: flex; align-items: center; gap: var(--nui-space-half); padding: 4px var(--nui-space-half); border-radius: var(--border-radius1); ${idx === currentSlideIdx ? 'background: var(--color-shade2);' : ''} ${status !== 'fresh' && !isRendering ? 'opacity: 0.6;' : ''} cursor: pointer;">
-                        <span style="width: 6px; height: 6px; border-radius: 50%; background: ${dotColor[status]}; display: inline-block; flex-shrink: 0; ${status === 'rendering' ? 'opacity: 0.5;' : ''}" title="${statusLabel[status]}" data-slide-idx="${idx}"></span>
-                        <span style="font-size: var(--font-size-small); font-weight: 500; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" data-slide-idx="${idx}">${slide.label || slide.speaker} <span style="color: var(--text-color-dim); font-weight: 400;">#${idx + 1}</span></span>
+                    <div data-slide-idx="${idx}" style="display: flex; align-items: center; gap: var(--nui-space-half); padding: 4px var(--nui-space-half) 4px calc(var(--nui-space-half) + 4px); border-radius: var(--border-radius1); border-left: 3px solid ${isSelected ? 'var(--color-highlight)' : 'transparent'}; background: ${isSelected ? 'var(--color-shade2)' : 'transparent'}; ${status !== 'fresh' && !isRendering ? 'opacity: 0.5;' : ''} cursor: pointer;">
+                        <span style="width: 8px; height: 8px; border-radius: 50%; background: ${dotColor[status]}; display: inline-block; flex-shrink: 0; ${status === 'rendering' ? 'opacity: 0.5;' : ''} box-shadow: 0 0 0 1px var(--border-shade2);" title="${statusLabel[status]}" data-slide-idx="${idx}"></span>
+                        <span style="font-size: var(--font-size-small); font-weight: ${isSelected ? '600' : '500'}; color: ${isSelected ? 'var(--text-color)' : 'var(--text-color-dim)'}; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" data-slide-idx="${idx}" title="${slide.label || slide.speaker} #${idx + 1} (${statusLabel[status]})">${slide.label || slide.speaker} <span style="color: var(--text-color-dim); font-weight: 400;">#${idx + 1}</span></span>
                         ${!isRendering ? `<nui-button variant="icon" data-action="render-slide:${idx}" style="flex-shrink: 0; width: 1.75rem; height: 1.75rem;" title="Render this slide"><button type="button" aria-label="Render slide ${idx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button>` : ''}
                     </div>
                 `;
@@ -202,10 +203,29 @@ nui.registerPage('render', {
             currentSlideIdx = idx;
             const slide = deck.slides[idx];
 
-            // Update list highlighting
+            // Update list highlighting. The selected row gets an accent
+            // left border, a tint background, and full-color bold text.
+            // The inline-styled border-left, bg, and label styles here must
+            // stay in sync with the initial render in renderSlideList().
             slideList.querySelectorAll('[data-slide-idx]').forEach(el => {
-                el.style.background = parseInt(el.dataset.slideIdx) === idx ? 'var(--color-shade2)' : '';
+                const isSelected = parseInt(el.dataset.slideIdx) === idx;
+                el.style.borderLeftColor = isSelected ? 'var(--color-highlight)' : 'transparent';
+                el.style.background = isSelected ? 'var(--color-shade2)' : 'transparent';
+                // Update the label's font-weight + color too. The label is
+                // the second [data-slide-idx] on the row (the first is the
+                // dot, which we don't change).
+                const labelEls = el.querySelectorAll('span[data-slide-idx]');
+                const labelEl = labelEls[labelEls.length - 1];
+                if (labelEl) {
+                    labelEl.style.fontWeight = isSelected ? '600' : '500';
+                    labelEl.style.color = isSelected ? 'var(--text-color)' : 'var(--text-color-dim)';
+                }
             });
+            // Scroll the selected row into view if it's off-screen.
+            const selectedEl = slideList.querySelector(`[data-slide-idx="${idx}"]`);
+            if (selectedEl && selectedEl.scrollIntoView) {
+                selectedEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
 
             // Render slide content
             let html = '';
