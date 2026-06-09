@@ -2,13 +2,9 @@
 
 ## What This Is
 
-This project takes conversations from the [LLM Chat Arena](https://github.com/herrbasan/LLM-Gateway-Chat) — where two language models talk to each other directly with no human intervention after a single seed prompt — and transforms them into narrated, word-highlighted slideshows for YouTube publication.
+This project takes conversations from the [LLM Chat Arena](https://github.com/herrbasan/LLM-Gateway-Chat) and turns them into narrated, word-highlighted slideshows for YouTube publication.
 
-The premise is straightforward: one human writes a seed prompt. Two models respond to each other. No one touches the conversation again. The resulting transcript is then passed through a pipeline that generates narration, assigns voices, produces TTS audio, aligns every word to its timestamp, and renders a browser-based slideshow where each word highlights in sync with the audio.
-
-The full unmodified transcript is published alongside every video. Anyone can scrub through and verify that what the narrator speaks is what's on screen, and what's on screen is the raw Arena export.
-
-A subtle but important detail: the narrator **speaks the seed prompt out loud at the start of every video** — verbatim, with the original `Topic:` prefix preserved. The human shows up once, at the very beginning, by reading their own prompt. After that, the conversation is the models'.
+A human writes a seed prompt. Two models respond to each other. The human then **steps away** and does not touch the conversation again — that non-interference is the whole premise. What follows is a transcript, narrated, voiced, audio-aligned, and published alongside the original video so anyone can verify that what the narrator speaks is what's on screen.
 
 ## What the Conversations Contain
 
