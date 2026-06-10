@@ -19,6 +19,29 @@ function parseArenaExport(arenaData) {
         throw new Error('Invalid Arena export: missing messages array');
     }
 
+    // Idempotent guard: if the input is ALREADY a parsed source object
+    // (e.g. the editor's "Generate with AI" re-sends deck.source, which
+    // has no moderator message and already has seedPrompt set), pass it
+    // through. Re-parsing a parsed source would lose the seedPrompt
+    // (the moderator is already stripped from messages), and the title
+    // slide would fall back to the AI-generated topic summary.
+    const hasModerator = arenaData.messages.some(
+        m => (m.speaker || '').toLowerCase() === 'moderator'
+    );
+    if (!hasModerator && arenaData.seedPrompt) {
+        return {
+            id: arenaData.id || 'unknown',
+            exportedAt: arenaData.exportedAt || new Date().toISOString(),
+            topic: arenaData.topic || 'Untitled Conversation',
+            seedPrompt: arenaData.seedPrompt,
+            seedPromptRaw: arenaData.seedPromptRaw || arenaData.seedPrompt,
+            participants: (arenaData.participants || []).map(p =>
+                typeof p === 'string' ? p : (p && p.name) || null
+            ).filter(Boolean),
+            messages: arenaData.messages
+        };
+    }
+
     // Normalize participants to a flat array of name strings.
     // v1: ['glm5-chat', 'minimax-m3-chat']
     // v2: [{ name: 'glm5-chat', model: 'glm5-chat', role: 'assistant' }, ...]
