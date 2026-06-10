@@ -8,9 +8,11 @@ This is a project-facing snapshot, not a session log. Session-by-session working
 
 ## What's on `master`
 
-The `master` branch is published at [github.com/herrbasan/LLM-Chat-Arena-Slides](https://github.com/herrbasan/LLM-Chat-Arena-Slides). The published head is `945b71e` (the `chore: prepare repo for public release` commit). Four local commits sit on top, queued for the next push:
+The `master` branch is published at [github.com/herrbasan/LLM-Chat-Arena-Slides](https://github.com/herrbasan/LLM-Chat-Arena-Slides). The published head is `945b71e` (the `chore: prepare repo for public release` commit). Five local commits sit on top, queued for the next push:
 
 ```
+(server/package.json change — see "Open follow-ups" for context)  ← not yet committed
+b4330b1 fix: preserve seedPrompt when /api/generate-deck re-sends parsed source
 61c6cbc docs+code: drop the 'The conversation began with this prompt' preamble
 e51f204 docs: tighten the 'What This Is' opener to lead with non-interference
 ef903ef docs+code: lock the opening-slide narration contract
@@ -18,7 +20,7 @@ ef903ef docs+code: lock the opening-slide narration contract
 945b71e chore: prepare repo for public release       ← origin/master
 ```
 
-The four local commits together form one milestone: a README + opening-slides-contract rewrite. They push as a single fast-forward when ready.
+The first unpushed commit (`b4330b1`) is a real bug fix: the editor's "Generate with AI" was re-sending the already-parsed source object to `/api/generate-deck`. The server's `parseArenaExport` then tried to re-derive the seed prompt from a moderator message that was no longer in the messages array, failed silently, and the title slide fell back to `source.topic` (the AI-generated summary). The fix is an idempotent guard at the top of `parseArenaExport` that recognizes already-parsed sources and passes them through.
 
 ---
 
@@ -33,18 +35,22 @@ The four local commits together form one milestone: a README + opening-slides-co
 
 ## Open follow-ups (deferred work)
 
-### Existing deck is missing the Setup slide
+### ~~Existing deck is missing the Setup slide~~ RESOLVED 2026-06-10
 
-The House vs Grooves project on the server (`slideshow_w8hveoIVFd6e1B8y`) was generated before commit `1c5e808` added the deterministic-opens behavior. So its slide list is:
+The House vs Grooves project on the server (`slideshow_w8hveoIVFd6e1B8y`) was generated before commit `1c5e808` added the deterministic-opens behavior. As of 2026-06-10 it now has the contract-correct opening:
 
 ```
-details → title → [55 conversation slides] → end
+setup → details → title → [55 conversation slides] → end
 ```
 
-There's no `setup` slide. The new Setup narration (the "you're about to hear a conversation between two language models…" opening) will only appear in **newly generated** decks. To retrofit the existing deck:
+Two one-off scripts in `server/` were used to retrofit it without losing data:
 
-- **Easy path:** regenerate the deck via the editor's "Generate with AI" button. Destructive — overwrites any manual edits.
-- **Less-destructive path:** `PUT /api/projects/{id}` with a Setup slide spliced at position 0. ~10 lines of Node.
+- **`server/retrofit-setup-slide.js`** — splices the Setup slide at position 0. Throws if Setup is already present. Idempotent.
+- **`server/normalize-opening-slides.js`** — replaces slides 0-2 with the contract-correct setup / details / title derived from `source.seedPromptRaw`, `source.exportedAt`, and `source.participants`. Idempotent.
+
+Both scripts append to `server/data/slideshows.jsonl` without a leading newline, to avoid producing blank lines or corrupting the append-style JSONL with concatenated records.
+
+> **The editor's "Generate with AI" was clobbering this.** Every click was re-sending `deck.source` to `/api/generate-deck`, and `parseArenaExport` was re-deriving the title from `source.topic` (the AI summary) instead of `source.seedPromptRaw` (the moderator's literal message). Fixed in commit `b4330b1`. The next person who regenerates the deck should now get the right title from the start.
 
 ### Title slide visual treatment
 
@@ -68,6 +74,12 @@ These may resurface for the spin-off project (see below).
 ### Re-render the live deck
 
 The House vs Grooves deck was re-rendered once during the session (the server log shows the `[Render] Slide N: generating TTS... aligned M words` lines from when the user clicked "Render All"). Audio on disk should now be clean (no `*` markers in the spoken text). If the deck has been edited since, individual slides may show "stale" in the render & play page — the user can re-render per-slide or full-deck as needed.
+
+### nVoice URL lives in `server/.env` only — not committed
+
+`NVOICE_URL` in `server/.env` was changed from `https://127.0.0.1:2244` to `https://192.168.0.100:2244` (nVoice runs on the Badkid box). The `.env` file is gitignored, so this is local config. If you clone fresh, you'll need to set it manually. A `server/.env.example` would help here but wasn't created yet.
+
+Symptom if the URL is wrong: every render logs `[Render] nVoice unavailable — skipping alignment.` after TTS finishes. Audio plays in the browser but word-by-word highlighting never starts.
 
 ---
 
