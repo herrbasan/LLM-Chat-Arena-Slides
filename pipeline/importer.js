@@ -1,15 +1,18 @@
 // pipeline/importer.js
-// Arena Export JSON → Raw Source Data
-// Thin parser — no text cleaning, no slide creation.
-// Text cleaning and slide construction are handled by llm-clean.js.
+// Arena Export JSON → Source Object
+// Thin parser — extracts the seed prompt, normalizes participants, strips
+// the moderator from messages, and returns a clean source object the
+// rest of the pipeline consumes. No text cleaning, no slide creation —
+// that's llm-clean.js.
 //
 // Supports both legacy (v1) and current (v2, mode: "arena") formats.
-// The v2 format consolidated with the normal chat export, so the
-// structure is richer: participants are objects with name/model/role
-// and messages have additional metadata (id, usage, streamStats).
-// The first message is typically a `moderator` system prompt that
-// sets the topic — we keep it in the messages array so downstream
-// tools can decide how to use it.
+// The v2 format has participants as objects with name/model/role and
+// messages with extra metadata (id, usage, streamStats). The first
+// message is typically a `moderator` system prompt that sets the topic.
+//
+// The full source (settings, summary, chatInfo, etc.) is preserved on
+// the deck record. This module just extracts the fields the pipeline
+// actually needs.
 
 const fs = require('fs');
 const path = require('path');
@@ -22,23 +25,26 @@ function parseArenaExport(arenaData) {
     // Idempotent guard: if the input is ALREADY a parsed source object
     // (e.g. the editor's "Generate with AI" re-sends deck.source, which
     // has no moderator message and already has seedPrompt set), pass it
-    // through. Re-parsing a parsed source would lose the seedPrompt
-    // (the moderator is already stripped from messages), and the title
-    // slide would fall back to the AI-generated topic summary.
+    // through. Re-parsing would lose the seedPrompt (the moderator is
+    // already stripped from messages) and the topic slide would fall
+    // back to the AI-generated summary.
     const hasModerator = arenaData.messages.some(
         m => (m.speaker || '').toLowerCase() === 'moderator'
     );
     if (!hasModerator && arenaData.seedPrompt) {
         return {
-            id: arenaData.id || 'unknown',
-            exportedAt: arenaData.exportedAt || new Date().toISOString(),
-            topic: arenaData.topic || 'Untitled Conversation',
+            id: arenaData.id || arenaData.source?.id || 'unknown',
+            exportedAt: arenaData.exportedAt || arenaData.source?.exportedAt || new Date().toISOString(),
+            topic: arenaData.topic || arenaData.source?.topic || 'Untitled Conversation',
             seedPrompt: arenaData.seedPrompt,
             seedPromptRaw: arenaData.seedPromptRaw || arenaData.seedPrompt,
-            participants: (arenaData.participants || []).map(p =>
+            participants: (arenaData.participants || arenaData.source?.participants || []).map(p =>
                 typeof p === 'string' ? p : (p && p.name) || null
             ).filter(Boolean),
-            messages: arenaData.messages
+            messages: arenaData.messages || arenaData.source?.messages || [],
+            // renderedAt is optional; absent on a fresh parse, set by
+            // the deck-creation caller.
+            renderedAt: arenaData.renderedAt || arenaData.source?.renderedAt || null
         };
     }
 
@@ -63,13 +69,12 @@ function parseArenaExport(arenaData) {
     }
 
     // The moderator's first message is the SEED PROMPT — the literal text
-    // sent to participantA. We extract it and expose it as `seedPrompt`.
-    // The `topic` field on the Arena export is the AI-generated summary title
-    // produced AFTER the conversation; do NOT use it for the title slide.
-    //
-    // The moderator message itself is stripped from `messages` so the LLM
-    // never sees it. The title slide is injected deterministically in the
-    // post-processing step of llm-clean.js, using `seedPrompt`.
+    // sent to participantA. We extract it and expose it as `seedPrompt`
+    // (without the "Topic:" prefix) and `seedPromptRaw` (with it).
+    // The `topic` field on the Arena export is the AI-generated summary
+    // title produced AFTER the conversation; do NOT use it for the topic
+    // slide. The moderator message itself is stripped from `messages` so
+    // the renderer never sees it.
     const moderatorIdx = arenaData.messages.findIndex(
         m => (m.speaker || '').toLowerCase() === 'moderator'
     );
@@ -81,13 +86,13 @@ function parseArenaExport(arenaData) {
     return {
         id: arenaData.id || arenaData.chatInfo?.id || 'unknown',
         exportedAt: arenaData.exportedAt || new Date().toISOString(),
-        // Kept for backward compat / display — but DO NOT use for the title slide.
+        // Kept for backward compat / display — but DO NOT use for the topic slide.
         topic: arenaData.topic || arenaData.chatInfo?.title || 'Untitled Conversation',
         // The actual seed prompt that the first model responded to.
         // Verbatim from messages[0].content, minus the `Topic:` prefix.
         seedPrompt: seedPrompt,
         // Raw, unprefixed moderator content including `Topic:` prefix, for
-        // the deterministic title slide to speak verbatim if it wants.
+        // the deterministic topic slide to speak verbatim if it wants.
         seedPromptRaw: moderatorMessage ? (moderatorMessage.content || '').trim() : null,
         participants: participants,
         // Messages WITHOUT the moderator. The LLM never sees the moderator.
@@ -99,7 +104,11 @@ function parseArenaExport(arenaData) {
                 content: m.content || m.text || '',
                 createdAt: m.createdAt || null,
                 model: m.model || m.speaker || null
-            }))
+            })),
+        // renderedAt is the publish-date approximation. The importer
+        // doesn't know it; the caller (cleanWithLLM or the reimport
+        // script) sets it. Default to exportedAt for safety.
+        renderedAt: arenaData.exportedAt || new Date().toISOString()
     };
 }
 

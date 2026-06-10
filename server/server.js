@@ -89,7 +89,11 @@ function computeRenderHash(text, voice, speed) {
 
 function getSpokenText(slide) {
     let text;
-    if (slide.type === 'title' || slide.type === 'end') {
+    // topic and end slides speak the narration; everything else (setup,
+    // details, conversation) speaks the on-screen text. The narration
+    // for setup/details is a short spoken intro, and the on-screen
+    // meta/text is what the viewer reads while the narrator speaks.
+    if (slide.type === 'topic' || slide.type === 'end') {
         text = slide.narration || slide.text || '';
     } else {
         text = slide.text || slide.narration || '';

@@ -197,7 +197,7 @@ nui.registerPage('editor', {
                         <div class="slide-card-header">
                             <div class="slide-card-meta">
                                 ${statusDot}
-                                <nui-badge variant="${slide.type === 'title' ? 'primary' : (slide.type === 'end' ? 'danger' : 'info')}">${slide.type}</nui-badge>
+                                <nui-badge variant="${slide.type === 'topic' ? 'primary' : (slide.type === 'end' ? 'danger' : 'info')}">${slide.type}</nui-badge>
                                 <strong>${escapeHtml(slide.label || slide.speaker || '')}</strong>
                                 <span class="slide-card-index">#${idx + 1}</span>
                             </div>
@@ -223,7 +223,7 @@ nui.registerPage('editor', {
                     ta.addEventListener('change', (e) => {
                         const idx = parseInt(e.target.dataset.slideText);
                         const slide = deck.slides[idx];
-                        if (slide.type === 'title' || slide.type === 'end') {
+                        if (slide.type === 'topic' || slide.type === 'end') {
                             slide.narration = e.target.value;
                         } else {
                             slide.text = e.target.value;
@@ -401,7 +401,7 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                         parameters: {
                             type: 'object',
                             properties: {
-                                type: { type: 'string', enum: ['title', 'narration', 'conversation', 'end'] },
+                                type: { type: 'string', enum: ['topic', 'narration', 'conversation', 'end'] },
                                 speaker: { type: 'string' },
                                 label: { type: 'string' },
                                 text: { type: 'string' },

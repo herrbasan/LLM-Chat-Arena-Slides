@@ -438,3 +438,231 @@ nui-dialog[mode="page"] .options-source {
     display: inline;
     opacity: 1;
 }
+
+/* ─── Slide class hooks (renderer-emitted, data-driven) ─── */
+/*
+ * The render page emits a structured DOM with stable class hooks for
+ * every meaningful state. These rules provide sensible defaults; tune
+ * freely.
+ */
+
+/* Base wrapper. The .slide div fills the player area. */
+.slide {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+}
+
+/* Per-type hooks. Each is a no-op by default — layout below provides
+ * the actual styling — but they're available for per-type overrides. */
+.slide--setup { }
+.slide--details { }
+.slide--topic { }
+.slide--conversation { }
+.slide--end { }
+
+/* Per-role hook. Allows per-speaker tinting of the conversation slide. */
+.slide--speaker-narrator { }
+.slide--speaker-participantA {
+    /* No default; tune as you like. */
+}
+.slide--speaker-participantB {
+    /* No default; tune as you like. */
+}
+
+/* Position-in-deck hooks. */
+.slide--first { }
+.slide--last { }
+
+/* New-speaker transition. The renderer adds this class to a slide
+ * whose speaker differs from the previous slide. The hook is here for
+ * any visual treatment you want — top accent bar, brief banner, etc. */
+.slide--new-speaker {
+    position: relative;
+}
+.slide--new-speaker::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--color-highlight);
+    opacity: 0.6;
+}
+
+/* Split-chunk hooks. Conversation slides that are part of a multi-chunk
+ * split of a single source message get one of these. */
+.slide--split-start { }
+.slide--split-middle { }
+.slide--split-end { }
+
+/* ─── Layout hooks (driven by SLIDE_STYLES in render.js) ─── */
+
+/* Header. Slim row, eyebrow above, label and timestamp in a flex row. */
+.slide-header {
+    margin-bottom: var(--nui-space);
+}
+.slide-eyebrow {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text-color-dim);
+    margin-bottom: 4px;
+}
+.slide-header__row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--nui-space);
+}
+.slide-header__label {
+    font-size: 14px;
+    font-weight: bold;
+    color: var(--color-highlight);
+}
+.slide-header__timestamp {
+    font-size: var(--font-size-xsmall);
+    color: var(--text-color-dim);
+}
+
+/* Body. Sized by --text-size--{size}, aligned by --align-{left|center}. */
+.slide-body {
+    line-height: 1.5;
+}
+.slide--text-size-sm .slide-body { font-size: var(--font-size-small); }
+.slide--text-size-md .slide-body { font-size: 1.125rem; }
+.slide--text-size-lg .slide-body { font-size: 1.5rem; }
+.slide--text-size-xl .slide-body { font-size: 2.25rem; line-height: 1.25; }
+.slide--align-left   .slide-body { text-align: left; }
+.slide--align-center .slide-body { text-align: center; }
+
+/* Layout: framed. Used by setup. */
+.slide--layout-framed .slide-body--text {
+    padding: var(--nui-space);
+    border-left: 3px solid var(--color-highlight);
+    background: var(--color-shade1);
+    border-radius: var(--border-radius1);
+    margin-bottom: var(--nui-space);
+}
+
+/* Layout: meta. Used by details. */
+.slide--layout-meta {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nui-space);
+}
+.slide--layout-meta .slide-body--text {
+    /* The details slide's on-screen text is empty — the meta block is
+     * the visible content. The narration still plays in the words
+     * container below. */
+    display: none;
+}
+
+/* Layout: centered. Used by topic. */
+.slide--layout-centered {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    height: 100%;
+    padding: var(--nui-space-double);
+}
+.slide--layout-centered .slide-body--text {
+    font-weight: bold;
+    margin-bottom: var(--nui-space);
+}
+
+/* Layout: flow. Used by conversation. */
+.slide--layout-flow .slide-body {
+    /* Default; just keeps the words-container in flow. */
+}
+
+/* Layout: minimal. Used by end. */
+.slide--layout-minimal {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+    color: var(--text-color-dim);
+}
+
+/* Accent background for the topic slide. */
+.slide--accent-bg {
+    background: var(--color-shade1);
+    border-radius: var(--border-radius2);
+    padding: var(--nui-space);
+}
+
+/* ─── Details meta block ─── */
+
+.details-meta {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nui-space-half);
+    padding: var(--nui-space);
+    background: var(--color-shade1);
+    border-radius: var(--border-radius1);
+    border-left: 3px solid var(--color-highlight);
+    max-width: 32rem;
+}
+.details-meta__row {
+    display: flex;
+    align-items: center;
+    gap: var(--nui-space);
+    font-size: var(--font-size-small);
+}
+.details-meta__label {
+    color: var(--text-color-dim);
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    min-width: 6rem;
+    flex-shrink: 0;
+}
+.details-meta__value {
+    color: var(--text-color);
+}
+.details-meta__row--models .details-meta__label {
+    align-self: flex-start;
+}
+.details-meta__models {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--nui-space-half);
+}
+
+/* Model chip — one per model on the details slide. Each chip gets a
+ * per-role modifier class so you can color them independently. */
+.model-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: var(--border-radius2);
+    background: var(--color-shade2);
+    color: var(--text-color);
+    font-size: var(--font-size-small);
+    font-weight: 500;
+    border: 1px solid var(--border-shade1);
+}
+.model-chip--narrator { }
+.model-chip--participantA {
+    background: var(--color-shade2);
+    border-color: var(--color-highlight);
+    color: var(--color-highlight);
+}
+.model-chip--participantB {
+    background: var(--color-shade2);
+    border-color: var(--border-shade2);
+}
+
+/* Per-model class hook on the details slide wrapper (alternative to
+ * styling chips individually). */
+.details-meta__model--participantA .details-meta__models .model-chip--participantA { }
+.details-meta__model--participantB .details-meta__models .model-chip--participantB { }
+
+/* Narration block sits below the meta on the details slide. */
+.slide-narration {
+    margin-top: var(--nui-space);
+}
+

@@ -82,6 +82,11 @@ function spell(n) {
     return String(n); // Fallback for very large numbers
 }
 
+function capitalize(s) {
+    if (!s) return s;
+    return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function formatHumanDate(iso) {
     if (!iso) return null;
     const d = new Date(iso);
@@ -135,6 +140,25 @@ async function gatewayChat(messages) {
 }
 
 // ─── Deterministic opening / closing slides ────────────────────
+//
+// All four slide types are built here, deterministically, from the
+// source object. The LLM has no say in any of them. The renderer is
+// responsible for the visual treatment; this module just produces
+// the data.
+//
+// Slide-type contract:
+//   setup     — narrator frames the experiment ("about to hear a
+//               conversation between two LLMs...")
+//   details   — provenance block: recorded date, rendered date,
+//               model chips, turn count. The renderer lays this out
+//               as a meta block; we just supply the data.
+//   topic     — the seed prompt verbatim, with the "Topic:" prefix
+//               preserved. The renderer treats this as the visual
+//               centerpiece.
+//   conversation — one or more slides per source message. Long
+//               messages are split at sentence boundaries; each
+//               chunk has a `splitIdx` and the same `originalIdx`.
+//   end       — closing card.
 
 function buildOpeningSlides(source) {
     const participants = source.participants.filter(Boolean);
@@ -143,16 +167,29 @@ function buildOpeningSlides(source) {
         ? `${participants[0]} and ${participants[1]}`
         : (participants[0] || 'two language models');
 
+    // Turn count: the number of non-moderator messages. Source.messages
+    // has already had the moderator stripped upstream, so .length is
+    // the turn count directly.
+    const turnCount = (source.messages || []).length;
+
+    // Model chips. Each model becomes its own object so the renderer
+    // can emit a separate <div class="model-chip"> per model.
+    const modelChips = participants.map((name, i) => ({
+        name,
+        role: i === 0 ? 'participantA' : 'participantB'
+    }));
+
+    // Rendered date is set at the deck level (see cleanWithLLM), but
+    // we copy it into the details meta block for renderer convenience.
+    // If absent, fall back to exportedAt so the field is never empty.
+    const renderedAt = source.renderedAt || source.exportedAt;
+
     return [
         {
             type: 'setup',
             speaker: 'narrator',
             label: 'Narrator',
             text: 'Setup',
-            // Setup narration is a locked contract — see the README
-            // ("The Opening Slides" section). It frames the contract for
-            // the rest of the video: no human involvement after the seed
-            // prompt, every word the models' own.
             narration: "You're about to hear a conversation between two language models. They were given a single prompt \u2014 a topic \u2014 and then left to respond to each other directly, with no further human involvement. What follows is unedited and unsteered. The models chose every word themselves.",
             tts: null
         },
@@ -160,21 +197,31 @@ function buildOpeningSlides(source) {
             type: 'details',
             speaker: 'narrator',
             label: 'Narrator',
-            text: `Recorded on ${dateText}`,
-            narration: `This recording was generated on ${dateText}, featuring the models ${participantLine}.`,
-            tts: null
+            text: 'Details',
+            // Spoken: short intro. Names the date and the models.
+            // Spoken: short intro. Names the date, the models, and the
+            // turn count. "twenty" gets capitalized at the start of the
+            // sentence for natural TTS delivery.
+            narration: `This recording was generated on ${dateText}, featuring the models ${participantLine}. ${turnCount === 1 ? 'One' : capitalize(spell(turnCount))} turn${turnCount === 1 ? '' : 's'}.`,
+            tts: null,
+            // Structured meta block. The renderer reads these and emits
+            // its own DOM; we don't format the text here. Keep the
+            // shape stable so CSS hooks work.
+            meta: {
+                recordedAt: source.exportedAt,
+                renderedAt: renderedAt,
+                models: modelChips,
+                turnCount: turnCount
+            }
         },
         {
-            type: 'title',
+            type: 'topic',
             speaker: 'narrator',
             label: 'Narrator',
-            // On-screen: the literal moderator message, including the
-            // "Topic:" prefix — the viewer sees exactly what the human
-            // wrote, with no preamble, no speaker label, no eyebrow.
+            // On-screen + spoken: the literal moderator message, with
+            // the "Topic:" prefix preserved. The viewer sees and hears
+            // exactly what the human wrote.
             text: source.seedPromptRaw || source.seedPrompt || source.topic,
-            // Narrator reads ONLY the seed prompt, verbatim, with the
-            // "Topic:" prefix preserved. No framing beat — the contract
-            // is "just the topic, on a single slide." See Agents.md.
             narration: source.seedPromptRaw || source.seedPrompt || source.topic,
             tts: null
         }
@@ -271,12 +318,28 @@ function generateConversationSlides(source, progress) {
                 speaker: role,
                 label: label,
                 text: chunk,
+                // originalIdx is the message index (0-based, excludes
+                // the moderator). splitIdx is the chunk index within
+                // that message. splitCount is the total number of
+                // chunks for that message — set after the loop below.
                 originalIdx: idx,
-                tts: null,
-                _splitIdx: ci
+                splitIdx: ci,
+                tts: null
             });
         });
     });
+
+    // Backfill splitCount: total chunks for each originalIdx. Renderer
+    // uses this to determine split-start / split-middle / split-end.
+    const splitCounts = new Map();
+    for (const s of slides) {
+        if (s.type !== 'conversation') continue;
+        splitCounts.set(s.originalIdx, (splitCounts.get(s.originalIdx) || 0) + 1);
+    }
+    for (const s of slides) {
+        if (s.type !== 'conversation') continue;
+        s.splitCount = splitCounts.get(s.originalIdx);
+    }
 
     progress('llm', `Built ${slides.length} conversation slides (${source.messages.length} messages, deterministic)`, 70);
     return slides;
@@ -298,6 +361,10 @@ async function cleanWithLLM(sourceData, outputDir = null, progress = () => {}) {
     progress('import', `Loaded ${sourceData.messages?.length || 0} messages`, 10);
 
     // Normalize: accept both raw Arena JSON and pre-parsed source objects.
+    // The source object is the canonical input. We copy only the fields
+    // we need; everything else (settings, summary, chatInfo, ...) is
+    // ignored here. The full source is kept verbatim on the deck
+    // record so the renderer can reach it.
     const source = {
         id: sourceData.id || sourceData.source?.id || sourceData.source?.arenaExportId || 'unknown',
         topic: sourceData.topic || sourceData.source?.topic || 'Untitled',
@@ -305,14 +372,19 @@ async function cleanWithLLM(sourceData, outputDir = null, progress = () => {}) {
         messages: sourceData.messages || sourceData.source?.messages || [],
         exportedAt: sourceData.exportedAt || sourceData.source?.exportedAt || new Date().toISOString(),
         seedPrompt: sourceData.seedPrompt || sourceData.source?.seedPrompt || null,
-        seedPromptRaw: sourceData.seedPromptRaw || sourceData.source?.seedPromptRaw || null
+        seedPromptRaw: sourceData.seedPromptRaw || sourceData.source?.seedPromptRaw || null,
+        // renderedAt is the publish date approximation. Set at the deck
+        // level (caller provides it) and copied into the details meta
+        // block by buildOpeningSlides. If absent, we fall back to
+        // exportedAt so the field is never empty.
+        renderedAt: sourceData.renderedAt || sourceData.source?.renderedAt || null
     };
 
     if (source.messages.length === 0) {
         throw new Error('No messages found in source data');
     }
     if (!source.seedPrompt) {
-        console.warn('[LLM Clean] WARNING: source.seedPrompt is empty — title slide will fall back to topic summary.');
+        console.warn('[LLM Clean] WARNING: source.seedPrompt is empty — topic slide will fall back to topic summary.');
     }
 
     const participants = source.participants.filter(Boolean);
@@ -328,19 +400,21 @@ async function cleanWithLLM(sourceData, outputDir = null, progress = () => {}) {
     const opening = buildOpeningSlides(source);
     const ending = buildEndSlide();
 
-    // Step 3: Concatenate, dedupe adjacent identical slides, sanity-check.
+    // Step 3: Concatenate. Dedupe adjacent identical slides (defensive —
+    // shouldn't happen with deterministic generation, but cheap).
     const slides = [...opening, ...conversationSlides, ending];
-
-    // Dedupe adjacent identical-text+speaker slides (LLM occasionally emits a duplicate).
     for (let i = slides.length - 1; i > 0; i--) {
         if (slides[i].text === slides[i - 1].text && slides[i].speaker === slides[i - 1].speaker) {
             slides.splice(i, 1);
         }
     }
 
-    // Build the deck structure.
+    // Bump the deck format version. Old decks were version 1. Bump to 2
+    // because the slide structure changed (title → topic, conversation
+    // has explicit splitCount, details has meta block). The render code
+    // gates on this.
     const deck = {
-        version: 1,
+        version: 2,
         source: {
             arenaExportId: source.id,
             exportedAt: source.exportedAt,
@@ -348,7 +422,10 @@ async function cleanWithLLM(sourceData, outputDir = null, progress = () => {}) {
             seedPrompt: source.seedPrompt,
             seedPromptRaw: source.seedPromptRaw,
             participants: participants,
-            messages: source.messages
+            messages: source.messages,
+            // Keep the renderedAt on the source too — the meta block
+            // on the details slide reads from here.
+            renderedAt: source.renderedAt || source.exportedAt
         },
         voiceMapping: {
             narrator:     { voice: VOICES.narrator.voice,     speed: VOICES.narrator.speed },
@@ -356,7 +433,8 @@ async function cleanWithLLM(sourceData, outputDir = null, progress = () => {}) {
             participantB: { voice: VOICES.participantB.voice, speed: VOICES.participantB.speed, label: participants[1] || '' }
         },
         slides: slides,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        renderedAt: source.renderedAt || source.exportedAt
     };
 
     progress('write', `Deck: ${slides.length} slides`, 90);

@@ -59,7 +59,12 @@ nui.registerPage('render', {
 
         function getSpokenText(slide) {
             let text;
-            if (slide.type === 'title' || slide.type === 'end') {
+            // topic and end speak the narration; everything else (setup,
+            // details, conversation) speaks the on-screen text. The
+            // narration for setup/details is a short spoken intro; the
+            // on-screen meta/text is what the viewer reads while the
+            // narrator speaks.
+            if (slide.type === 'topic' || slide.type === 'end') {
                 text = slide.narration || slide.text || '';
             } else {
                 text = slide.text || slide.narration || '';
@@ -74,6 +79,188 @@ nui.registerPage('render', {
             if (!s) return s;
             return s.toString().replace(/\*+/g, '');
         }
+
+        // ─── Per-slide-type style configuration ─────────────────────
+        //
+        // The render function reads from this object to decide layout,
+        // which UI bits to show (eyebrow, speaker, header), and what
+        // class hooks to add. To restyle a slide type, change CSS hooks
+        // (see web/css/main.css) — no JS changes needed for visual tweaks.
+        // To change layout/data flow, edit SLIDE_STYLES or the render
+        // helpers in loadSlide.
+        //
+        // Each entry has:
+        //   showEyebrow    — show the small uppercase type label
+        //                    ("SETUP", "TOPIC", "CONVERSATION", etc.)
+        //   showSpeaker    — show the speaker/role label in the header
+        //   showHeader     — show the entire header row at all
+        //   layout         — "framed" | "meta" | "centered" | "flow" | "minimal"
+        //                    drives the body DOM structure
+        //   textSize       — "sm" | "md" | "lg" | "xl" (rendered as
+        //                    text-size--{size} class hook)
+        //   textAlign      — "left" | "center"
+        //   accentBackground — true to add .slide--accent-bg hook
+        //
+        // The class hooks (slide--{type}, slide--speaker-{role},
+        // slide--split-{start|middle|end}, slide--new-speaker) are
+        // always applied. Layout / eyebrow / speaker flags only control
+        // whether those specific UI elements are rendered.
+        const SLIDE_STYLES = {
+            setup: {
+                showEyebrow: false,
+                showSpeaker: false,
+                showHeader: true,
+                layout: 'framed',
+                textSize: 'md',
+                textAlign: 'left',
+                accentBackground: false
+            },
+            details: {
+                showEyebrow: false,
+                showSpeaker: false,
+                showHeader: true,
+                layout: 'meta',
+                textSize: 'md',
+                textAlign: 'left',
+                accentBackground: false
+            },
+            topic: {
+                showEyebrow: false,
+                showSpeaker: false,
+                showHeader: false,
+                layout: 'centered',
+                textSize: 'xl',
+                textAlign: 'center',
+                accentBackground: true
+            },
+            conversation: {
+                showEyebrow: true,
+                showSpeaker: true,
+                showHeader: true,
+                layout: 'flow',
+                textSize: 'md',
+                textAlign: 'left',
+                accentBackground: false
+            },
+            end: {
+                showEyebrow: false,
+                showSpeaker: false,
+                showHeader: false,
+                layout: 'minimal',
+                textSize: 'sm',
+                textAlign: 'center',
+                accentBackground: false
+            }
+        };
+
+        // Compute the set of class hooks for a slide based on its
+        // position in the deck and its relationship to neighbours.
+        // This is the single source of truth for state-class names.
+        function buildSlideClassList(slide, idx) {
+            const prev = deck.slides[idx - 1];
+            const next = deck.slides[idx + 1];
+            const classes = ['slide', `slide--${slide.type}`];
+
+            // Per-role hook for conversation slides.
+            if (slide.speaker) {
+                classes.push(`slide--speaker-${slide.speaker}`);
+            }
+
+            // Per-model chip hook for the details meta block.
+            if (slide.type === 'details' && Array.isArray(slide.meta?.models)) {
+                slide.meta.models.forEach(m => {
+                    if (m && m.role) classes.push(`details-meta__model--${m.role}`);
+                });
+            }
+
+            // Position-in-deck hooks.
+            if (idx === 0) classes.push('slide--first');
+            if (idx === deck.slides.length - 1) classes.push('slide--last');
+
+            // Speaker-transition marker. If the previous slide has a
+            // different speaker (or no speaker), this is a new-speaker
+            // boundary. The setup/details/topic slides all have speaker
+            // 'narrator' so we treat that as "no transition" for the
+            // conversation → conversation case, but a "new speaker"
+            // marker when entering the first conversation slide.
+            if (slide.type === 'conversation') {
+                if (!prev || prev.speaker !== slide.speaker) {
+                    classes.push('slide--new-speaker');
+                }
+                if (prev && prev.type === 'conversation' && prev.speaker === slide.speaker && prev.originalIdx === slide.originalIdx) {
+                    // Same message, same speaker → this is a split-chunk continuation.
+                    if (slide.splitIdx === 0) {
+                        classes.push('slide--split-start');
+                    } else if (slide.splitIdx === slide.splitCount - 1) {
+                        classes.push('slide--split-end');
+                    } else {
+                        classes.push('slide--split-middle');
+                    }
+                }
+            }
+
+            // Layout hook from the per-type style.
+            const style = SLIDE_STYLES[slide.type] || {};
+            if (style.layout) classes.push(`slide--layout-${style.layout}`);
+            if (style.textSize) classes.push(`slide--text-size-${style.textSize}`);
+            if (style.textAlign) classes.push(`slide--align-${style.textAlign}`);
+            if (style.accentBackground) classes.push('slide--accent-bg');
+
+            return classes;
+        }
+
+        // Render the details meta block. Each model gets its own chip
+        // so the user can style them independently.
+        function renderDetailsMeta(meta) {
+            if (!meta) return '';
+            const rows = [];
+
+            if (meta.recordedAt) {
+                rows.push(`<div class="details-meta__row">
+                    <span class="details-meta__label">Recorded</span>
+                    <time class="details-meta__value" datetime="${escapeHtml(meta.recordedAt)}">${escapeHtml(formatHumanDate(meta.recordedAt) || meta.recordedAt)}</time>
+                </div>`);
+            }
+
+            if (meta.renderedAt) {
+                rows.push(`<div class="details-meta__row">
+                    <span class="details-meta__label">Rendered</span>
+                    <time class="details-meta__value" datetime="${escapeHtml(meta.renderedAt)}">${escapeHtml(formatHumanDate(meta.renderedAt) || meta.renderedAt)}</time>
+                </div>`);
+            }
+
+            if (Array.isArray(meta.models) && meta.models.length) {
+                const chips = meta.models.map(m => {
+                    return `<span class="model-chip model-chip--${escapeHtml(m.role || 'unknown')}">${escapeHtml(m.name || '')}</span>`;
+                }).join('');
+                rows.push(`<div class="details-meta__row details-meta__row--models">
+                    <span class="details-meta__label">Models</span>
+                    <div class="details-meta__models">${chips}</div>
+                </div>`);
+            }
+
+            if (typeof meta.turnCount === 'number') {
+                const turnLabel = meta.turnCount === 1 ? 'turn' : 'turns';
+                rows.push(`<div class="details-meta__row">
+                    <span class="details-meta__label">Turns</span>
+                    <span class="details-meta__value">${meta.turnCount} ${turnLabel}</span>
+                </div>`);
+            }
+
+            return `<div class="details-meta">${rows.join('')}</div>`;
+        }
+
+        // Standalone date formatter used by both the details meta block
+        // and the conversation-slide timestamp.
+        function formatHumanDate(iso) {
+            if (!iso) return null;
+            const d = new Date(iso);
+            if (isNaN(d.getTime())) return null;
+            const months = ['January', 'February', 'March', 'April', 'May', 'June',
+                            'July', 'August', 'September', 'October', 'November', 'December'];
+            return `${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+        }
+
 
         // Memoized map of slide-idx → split-position-within-message.
         // Walked once per deck-instance; cleared on deck mutation.
@@ -295,29 +482,75 @@ nui.registerPage('render', {
                 selectedEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             }
 
-            // Render slide content
-            const headerLabel = buildHeaderLabel(slide, idx);
-            const createdAt = (slide.type === 'conversation' && slide.originalIdx != null)
-                ? deck?.source?.messages?.[slide.originalIdx]?.createdAt
-                : null;
-            const timestamp = formatTimestamp(createdAt);
-            let html = '';
-            html += `<div style="font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: var(--text-color-dim); margin-bottom: 8px;">${slide.type}</div>`;
-            html += `<div style="display: flex; align-items: baseline; gap: var(--nui-space); margin-bottom: 4px;">`;
-            html += `<div style="font-size: 14px; font-weight: bold; color: var(--color-highlight);">${escapeHtml(headerLabel)}</div>`;
-            if (timestamp) {
-                html += `<div style="font-size: var(--font-size-xsmall); color: var(--text-color-dim);">${escapeHtml(timestamp)}</div>`;
-            }
-            html += `</div>`;
+            // ── Body content ──
+            //
+            // The render function is now data-driven: it reads SLIDE_STYLES
+            // for which UI bits to show, then emits a structured DOM with
+            // class hooks. The actual visual styling lives in CSS.
+            const style = SLIDE_STYLES[slide.type] || {};
+            const classes = buildSlideClassList(slide, idx);
 
-            if (slide.type === 'title' || slide.type === 'end') {
-                html += `<div style="font-size: 36px; font-weight: bold; margin-bottom: 8px; line-height: 1.2;">${escapeHtml(slide.text || '')}</div>`;
+            let html = '';
+            html += `<div class="${classes.join(' ')}" data-slide-type="${escapeHtml(slide.type)}" data-slide-render-idx="${idx}">`;
+
+            // Header row. Per-type flags decide what shows.
+            if (style.showHeader) {
+                const headerLabel = buildHeaderLabel(slide, idx);
+                const createdAt = (slide.type === 'conversation' && slide.originalIdx != null)
+                    ? deck?.source?.messages?.[slide.originalIdx]?.createdAt
+                    : null;
+                const timestamp = createdAt ? formatTimestamp(createdAt) : null;
+
+                html += `<div class="slide-header">`;
+                if (style.showEyebrow) {
+                    html += `<div class="slide-eyebrow">${escapeHtml(slide.type)}</div>`;
+                }
+                if (style.showSpeaker || headerLabel) {
+                    html += `<div class="slide-header__row">`;
+                    if (style.showSpeaker) {
+                        html += `<div class="slide-header__label">${escapeHtml(headerLabel)}</div>`;
+                    }
+                    if (timestamp) {
+                        html += `<div class="slide-header__timestamp">${escapeHtml(timestamp)}</div>`;
+                    }
+                    html += `</div>`;
+                }
+                html += `</div>`;
+            }
+
+            // Body. Per-layout dispatch.
+            if (style.layout === 'meta') {
+                // Details slide: render the structured meta block. The
+                // spoken narration still goes through the words container
+                // so word-by-word highlighting works.
+                html += renderDetailsMeta(slide.meta);
                 if (slide.narration) {
-                    html += `<div class="words-container">${buildWordSpans(slide.narration, slide.tts)}</div>`;
+                    html += `<div class="slide-narration words-container">${buildWordSpans(slide.narration, slide.tts)}</div>`;
+                }
+            } else if (style.layout === 'centered') {
+                // Topic slide: large centered text, no header. Words
+                // container overlays the same text for highlighting.
+                html += `<div class="slide-body slide-body--text">${escapeHtml(slide.text || '')}</div>`;
+                if (slide.narration) {
+                    html += `<div class="slide-body words-container">${buildWordSpans(slide.narration, slide.tts)}</div>`;
+                }
+            } else if (style.layout === 'minimal') {
+                // End slide: small centered.
+                html += `<div class="slide-body slide-body--text">${escapeHtml(slide.text || '')}</div>`;
+            } else if (style.layout === 'framed') {
+                // Setup slide: framed text, with the narration words
+                // container below for highlighting.
+                html += `<div class="slide-body slide-body--text">${escapeHtml(slide.text || '')}</div>`;
+                if (slide.narration) {
+                    html += `<div class="slide-body words-container">${buildWordSpans(slide.narration, slide.tts)}</div>`;
                 }
             } else {
-                html += `<div class="words-container">${buildWordSpans(slide.text || slide.narration || '', slide.tts)}</div>`;
+                // Default: conversation / flow layout. Words container
+                // wraps the on-screen text.
+                html += `<div class="slide-body words-container">${buildWordSpans(slide.text || slide.narration || '', slide.tts)}</div>`;
             }
+
+            html += `</div>`;
 
             playerContent.innerHTML = html;
 
