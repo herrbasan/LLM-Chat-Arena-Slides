@@ -743,15 +743,17 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         const cacheDir = getProjectCacheDir(projectId);
         const projectPath = path.join(cacheDir, 'project_v3.json');
 
-        // Load previous render for cache comparison
-        let prevProject = null;
-        if (fs.existsSync(projectPath)) {
-            try { prevProject = JSON.parse(fs.readFileSync(projectPath, 'utf-8')); } catch {}
+        // Always start fresh — wipe all previously rendered files.
+        // A paragraph is either rendered or unrendered; there is no
+        // "stale cache" concept. Re-rendering always regenerates
+        // everything so the output is guaranteed consistent.
+        if (fs.existsSync(cacheDir)) {
+            fs.rmSync(cacheDir, { recursive: true, force: true });
         }
+        fs.mkdirSync(cacheDir, { recursive: true });
 
-        // TTS: generate audio for each paragraph that needs it
+        // TTS: generate audio for every paragraph
         let ttsGenerated = 0;
-        let ttsCached = 0;
         for (let msgIdx = 0; msgIdx < project.messages.length; msgIdx++) {
             const msg = project.messages[msgIdx];
             const role = msg.speaker || 'narrator';
@@ -765,26 +767,6 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
                 const audioFile = `msg_${msgIdx}_p_${paraIdx}_${renderHash}.mp3`;
                 const audioPath = path.join(cacheDir, audioFile);
                 const audioUrl = `/cache/audio/${projectId}/${audioFile}`;
-
-                // Check cache: same renderHash and file exists
-                const prevPara = prevProject?.messages?.[msgIdx]?.paragraphs?.[paraIdx];
-                if (prevPara?.renderHash === renderHash && fs.existsSync(audioPath)) {
-                    para.audioFile = audioFile;
-                    para.audioPath = audioPath;
-                    para.audioUrl = audioUrl;
-                    para.renderHash = renderHash;
-                    para.voice = voiceConfig.voice;
-                    para.speed = voiceConfig.speed;
-                    // Preserve existing alignment if hash matches
-                    if (prevPara.words?.length > 0 && prevPara.alignVersion === ALIGNMENT_VERSION) {
-                        para.words = prevPara.words;
-                        para.durationMs = prevPara.durationMs;
-                        para.alignComplete = prevPara.alignComplete;
-                        para.alignVersion = prevPara.alignVersion;
-                    }
-                    ttsCached++;
-                    continue;
-                }
 
                 // Generate TTS
                 console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: generating TTS...`);
@@ -831,7 +813,7 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         let alignSucceeded = 0;
 
         if (nVoiceAvailable) {
-            console.log(`[v3 Render] ${ttsGenerated} generated, ${ttsCached} cached. Running alignment...`);
+            console.log(`[v3 Render] ${ttsGenerated} paragraphs rendered. Running alignment...`);
 
             for (let msgIdx = 0; msgIdx < project.messages.length; msgIdx++) {
                 const msg = project.messages[msgIdx];
@@ -860,7 +842,7 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
             }
             console.log(`[v3 Render] Alignment complete: ${alignSucceeded}/${alignAttempted} succeeded`);
         } else {
-            console.log(`[v3 Render] ${ttsGenerated} generated, ${ttsCached} cached. nVoice unavailable — skipping alignment.`);
+            console.log(`[v3 Render] ${ttsGenerated} paragraphs rendered. nVoice unavailable — skipping alignment.`);
         }
 
         // Save final state with alignment data
@@ -882,7 +864,7 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         }
 
         const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
-        console.log(`[v3 Render] Complete for ${projectId}: ${ttsGenerated} TTS generated, ${ttsCached} cached, ${totalParagraphs} paragraphs, ${alignSucceeded} aligned`);
+        console.log(`[v3 Render] Complete for ${projectId}: ${ttsGenerated} rendered, ${alignSucceeded} aligned, ${totalParagraphs} total paragraphs`);
         res.json(project);
     } catch (err) {
         console.error('[Server] v3 Render failed:', err.message);
