@@ -439,6 +439,19 @@ nui-dialog[mode="page"] .options-source {
     opacity: 1;
 }
 
+/* v3 paragraph break — subtle visual separator between paragraphs
+   within a virtual slide. */
+.words-container .para-break {
+    display: block;
+    height: 0;
+    margin: 0;
+}
+
+/* v3 paragraph word container — inline wrapper per paragraph */
+.words-container .para-words {
+    display: inline;
+}
+
 /* ─── Slide class hooks (renderer-emitted, data-driven) ─── */
 /*
  * The render page emits a structured DOM with stable class hooks for

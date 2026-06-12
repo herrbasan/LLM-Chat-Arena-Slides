@@ -1,29 +1,28 @@
 // server/reimport.js
 //
 // One-off script. Reads a raw Arena export from the reference/ folder,
-// runs it through the refactored pipeline (importer + cleanWithLLM), and
-// writes a fresh project record to server/data/slideshows.jsonl.
+// runs it through the pipeline, and writes a fresh project record to
+// server/data/slideshows.jsonl.
 //
-// Use this to seed a deck with the new slide structure (topic instead
-// of title, details with meta block, conversation slides with explicit
-// splitCount, etc.) without going through the editor's import flow.
+// v3 mode (default): paragraph architecture — build-messages.js
+// v2 mode (--v2): slide architecture — build-deck.js
 //
 // Usage:
 //   node server/reimport.js [path-to-arena-export.json] [project-id]
-//
-// If arguments are omitted, defaults to the House vs Grooves reference
-// and a deterministic project id.
+//   node server/reimport.js --v2 [path-to-arena-export.json] [project-id]
 
 const fs = require('fs');
 const path = require('path');
 const { parseArenaExport } = require('../pipeline/importer.js');
 const { cleanWithLLM } = require('../pipeline/build-deck.js');
+const { buildProject } = require('../pipeline/build-messages.js');
 
+const USE_V3 = !process.argv.includes('--v2');
 const args = process.argv.slice(2).filter(a => !a.startsWith('--'));
 const SKIP_CLEAN = process.argv.includes('--skip-clean');
 const REFERENCE_PATH = args[0] || path.join(__dirname, '..', 'reference',
     'arena-house_vs__grooves__being_caugh-glm5-chat-vs-minimax-m3-chat-2026-06-08.json');
-const PROJECT_ID = args[1] || 'slideshow_house_vs_grooves';
+const PROJECT_ID = args[1] || (USE_V3 ? 'slideshow_house_vs_grooves_v3' : 'slideshow_house_vs_grooves');
 const JSONL_PATH = path.join(__dirname, 'data', 'slideshows.jsonl');
 
 async function main() {
@@ -34,38 +33,48 @@ async function main() {
     console.log(`Reading ${REFERENCE_PATH}...`);
     const raw = JSON.parse(fs.readFileSync(REFERENCE_PATH, 'utf-8'));
 
-    // Parse → clean. The cleanWithLLM is the canonical builder. It
-    // produces a deck with the new v2 structure (topic, meta block,
-    // splitCount, etc.).
-    console.log('Parsing + cleaning...');
-    const source = parseArenaExport(raw);
-    const deck = await cleanWithLLM(source, null, () => {}, { skipClean: SKIP_CLEAN });
+    if (USE_V3) {
+        console.log('Building v3 project (paragraph architecture)...');
+        const project = await buildProject(raw, null, (stage, message, pct) => {
+            if (message) console.log(`  [${stage}] ${message} (${pct.toFixed(0)}%)`);
+        }, { useLLM: true });
 
-    // Stamp the project id. cleanWithLLM doesn't know about the
-    // wrapping record shape — that's the editor's job — so we set
-    // the id here.
-    deck._id = PROJECT_ID;
-    deck.createdAt = Date.now();
-    deck.updatedAt = Date.now();
+        project._id = PROJECT_ID;
+        project.createdAt = Date.now();
+        project.updatedAt = Date.now();
 
-    // Truncate the JSONL before writing the new record. This is a
-    // destructive reimport — wipes all existing projects. The cache
-    // is also wiped (deleted separately by the user, or the next
-    // "Render All" will just regenerate what's stale).
-    console.log(`Truncating ${JSONL_PATH}...`);
-    fs.writeFileSync(JSONL_PATH, '');
+        console.log(`Truncating ${JSONL_PATH}...`);
+        fs.writeFileSync(JSONL_PATH, '');
+        fs.appendFileSync(JSONL_PATH, JSON.stringify(project) + '\n');
 
-    // Write the new record as the first (and only) line.
-    fs.appendFileSync(JSONL_PATH, JSON.stringify(deck) + '\n');
+        const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
+        console.log('');
+        console.log('=== Reimport summary (v3) ===');
+        console.log(`Project id: ${PROJECT_ID}`);
+        console.log(`Version: ${project.version}`);
+        console.log(`Messages: ${project.messages.length}`);
+        console.log(`Total paragraphs: ${totalParagraphs}`);
+        console.log(`Seed prompt: ${project.source?.seedPromptRaw?.substring(0, 80)}...`);
+    } else {
+        console.log('Parsing + cleaning (v2 slide architecture)...');
+        const source = parseArenaExport(raw);
+        const deck = await cleanWithLLM(source, null, () => {}, { skipClean: SKIP_CLEAN });
 
-    console.log('');
-    console.log('=== Reimport summary ===');
-    console.log(`Project id: ${PROJECT_ID}`);
-    console.log(`Deck version: ${deck.version}`);
-    console.log(`Total slides: ${deck.slides.length}`);
-    console.log(`Conversation slides: ${deck.slides.filter(s => s.type === 'conversation').length}`);
-    console.log(`Turns (distinct originalIdx): ${new Set(deck.slides.filter(s => s.type === 'conversation').map(s => s.originalIdx)).size}`);
-    console.log(`Opening: setup → details → topic → ${deck.slides.length - 4} conversation → end`);
+        deck._id = PROJECT_ID;
+        deck.createdAt = Date.now();
+        deck.updatedAt = Date.now();
+
+        console.log(`Truncating ${JSONL_PATH}...`);
+        fs.writeFileSync(JSONL_PATH, '');
+        fs.appendFileSync(JSONL_PATH, JSON.stringify(deck) + '\n');
+
+        console.log('');
+        console.log('=== Reimport summary (v2) ===');
+        console.log(`Project id: ${PROJECT_ID}`);
+        console.log(`Deck version: ${deck.version}`);
+        console.log(`Total slides: ${deck.slides.length}`);
+        console.log(`Conversation slides: ${deck.slides.filter(s => s.type === 'conversation').length}`);
+    }
 }
 
 main().catch(err => {

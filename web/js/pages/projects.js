@@ -27,7 +27,7 @@ nui.registerPage('projects', {
                 <div class="project-card-body" style="flex: 1; cursor: pointer; min-width: 0;">
                     <div style="font-weight: bold; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.title}</div>
                     <div style="font-size: var(--font-size-xsmall); color: var(--text-color-dim);">
-                        ${item.dateDisplay} — ${item.slides} slides
+                        ${item.dateDisplay} — ${item.subtitle || (item.slides + ' slides')}
                     </div>
                 </div>
                 <nui-button variant="icon" data-delete-id="${item.id}">
@@ -74,14 +74,26 @@ nui.registerPage('projects', {
 
                 if (projects.length === 0 || !list) return;
 
-                const items = projects.map((p, idx) => ({
-                    id: p._id,
-                    title: p.source?.topic || 'Untitled',
-                    date: p.createdAt ? new Date(p.createdAt).toISOString().slice(0, 10) : '',
-                    dateDisplay: formatDate(p.createdAt),
-                    slides: (p.slides || []).length,
-                    oidx: idx
-                }));
+                const items = projects.map((p, idx) => {
+                    const isV3 = p.version === 3;
+                    const msgCount = (p.messages || []).length;
+                    const paraCount = isV3 ? msgCount > 0 ? p.messages.reduce((s, m) => s + (m.paragraphs?.length || 0), 0) : 0 : 0;
+                    const slideCount = (p.slides || []).length;
+                    return {
+                        id: p._id,
+                        title: p.source?.topic || 'Untitled',
+                        date: p.createdAt ? new Date(p.createdAt).toISOString().slice(0, 10) : '',
+                        dateDisplay: formatDate(p.createdAt),
+                        slides: slideCount,
+                        isV3,
+                        msgCount,
+                        paraCount,
+                        subtitle: isV3
+                            ? `${msgCount} messages · ${paraCount} paragraphs`
+                            : `${slideCount} slides`,
+                        oidx: idx
+                    };
+                });
 
                 if (list.data) {
                     list.updateData(items);
@@ -142,80 +154,43 @@ nui.registerPage('projects', {
                     throw new Error('Invalid Arena Export format');
                 }
 
-                // Normalize participants to a flat array of name strings.
-                // v1: ['glm5-chat', 'minimax-m3-chat']
-                // v2: [{ name: 'glm5-chat', model: ..., role: ... }, ...]
-                let participants = (json.participants || [])
-                    .map(p => {
-                        if (typeof p === 'string') return p;
-                        if (p && typeof p === 'object' && p.name) return p.name;
-                        return null;
-                    })
-                    .filter(Boolean);
+                // Use v3 pipeline: send raw Arena JSON to generate-deck,
+                // then save the result as a project.
+                nui.components.banner.show({ content: 'Importing conversation…', priority: 'info' });
 
-                // Fallback: derive from message speakers.
-                if (participants.length === 0) {
-                    const uniqueSpeakers = [...new Set(json.messages.filter(m => m.speaker).map(m => m.speaker))];
-                    participants = uniqueSpeakers;
-                }
-
-                // Extract the SEED PROMPT (moderator's first message, verbatim
-                // minus the "Topic:" prefix). This is what was actually sent to
-                // participantA — the thing the first model responded to. The
-                // `topic` field on the export is the AI-generated summary title
-                // and must NOT be used for the title slide.
-                const moderatorIdx = json.messages.findIndex(
-                    m => (m.speaker || '').toLowerCase() === 'moderator'
-                );
-                const moderatorMessage = moderatorIdx >= 0 ? json.messages[moderatorIdx] : null;
-                const seedPrompt = moderatorMessage
-                    ? (moderatorMessage.content || '').replace(/^\s*Topic:\s*/i, '').trim()
-                    : null;
-                const seedPromptRaw = moderatorMessage
-                    ? (moderatorMessage.content || '').trim()
-                    : null;
-                const conversationMessages = json.messages.filter((_, i) => i !== moderatorIdx);
-
-                const payload = {
-                    source: {
-                        arenaExportId: json.id || json.chatInfo.id,
-                        exportedAt: json.exportedAt || new Date().toISOString(),
-                        topic: json.topic || json.chatInfo?.title || 'Imported Conversation',
-                        seedPrompt: seedPrompt,
-                        seedPromptRaw: seedPromptRaw,
-                        participants: participants,
-                        // Strip the moderator so the LLM never sees it.
-                        messages: conversationMessages
+                const res = await fetch('/api/v3/generate-deck', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
                     },
-                    slides: [],
-                    voiceMapping: {
-                        narrator: { voice: window.SLIDESHOW_CONFIG.DEFAULT_NARRATOR_VOICE, speed: window.SLIDESHOW_CONFIG.DEFAULT_NARRATOR_SPEED }
-                    }
-                };
+                    body: JSON.stringify(json)
+                });
 
-                if (participants[0]) {
-                    payload.voiceMapping.participantA = { voice: 'en-US-Female', speed: 1.0, label: participants[0] };
-                }
-                if (participants[1]) {
-                    payload.voiceMapping.participantB = { voice: 'en-GB-Male', speed: 1.0, label: participants[1] };
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.error || `Server returned ${res.status}`);
                 }
 
-                const res = await fetch('/api/projects', {
+                const project = await res.json();
+
+                // Save as a new project
+                const saveRes = await fetch('/api/projects', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify(project)
                 });
-                const result = await res.json();
+                const saveResult = await saveRes.json();
 
                 nui.components.banner.show({
-                    content: 'Import successful',
+                    content: `Imported: ${project.messages?.length || 0} messages, ${project.messages?.reduce((s, m) => s + (m.paragraphs?.length || 0), 0) || 0} paragraphs`,
                     priority: 'success',
                     autoClose: 3000
                 });
 
-                window.SLIDESHOW_APP.currentProject = result.id;
+                window.SLIDESHOW_APP.currentProject = saveResult.id;
                 if (window.SLIDESHOW_APP.updateStepper) window.SLIDESHOW_APP.updateStepper();
-                window.location.hash = `#page=editor&id=${result.id}`;
+                window.location.hash = `#page=editor&id=${saveResult.id}`;
             } catch (err) {
                 console.error('Import failed:', err);
                 nui.components.banner.show({

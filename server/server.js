@@ -22,9 +22,10 @@ try {
 
 // Pipeline modules
 const { cleanWithLLM } = require('../pipeline/build-deck.js');
+const { buildProject } = require('../pipeline/build-messages.js');
 const { parseArenaExport } = require('../pipeline/importer.js');
-const { processDeck: ttsProcess } = require('../pipeline/tts.js');
-const { processDeck: alignProcess, ALIGNMENT_VERSION } = require('../pipeline/align.js');
+const { processInput: ttsProcess } = require('../pipeline/tts.js');
+const { processInput: alignProcess, processProject: alignProject, ALIGNMENT_VERSION } = require('../pipeline/align.js');
 
 const app = express();
 app.use(cors());
@@ -173,17 +174,31 @@ app.get('/api/projects', async (req, res) => {
 
 app.post('/api/projects', (req, res) => {
     if (!db) return res.status(500).json({ error: 'Database not initialized' });
-    const { source, voiceMapping, slides } = req.body;
-    
-    const id = db.insertWithPrefix('slideshow', {
-        version: 1,
-        source: source || {},
-        voiceMapping: voiceMapping || {},
-        slides: slides || [],
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-    });
-    res.json({ id, status: 'created' });
+    const body = req.body;
+    const isV3 = body.version === 3 || (body.messages && !body.slides);
+
+    if (isV3) {
+        const id = db.insertWithPrefix('slideshow', {
+            version: 3,
+            source: body.source || {},
+            voiceMapping: body.voiceMapping || {},
+            messages: body.messages || [],
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+        });
+        res.json({ id, status: 'created', version: 3 });
+    } else {
+        const { source, voiceMapping, slides } = body;
+        const id = db.insertWithPrefix('slideshow', {
+            version: 1,
+            source: source || {},
+            voiceMapping: voiceMapping || {},
+            slides: slides || [],
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+        });
+        res.json({ id, status: 'created', version: 1 });
+    }
 });
 
 app.get('/api/projects/:id', (req, res) => {
@@ -191,8 +206,39 @@ app.get('/api/projects/:id', (req, res) => {
     const doc = db.get(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Project not found' });
 
-    // Merge render cache data (tts.words, durationMs) into the response.
-    // The render cache is the source of truth for rendered TTS/alignment data.
+    // v3 projects: merge render cache from project_v3.json
+    if (doc.version === 3) {
+        const projectPath = path.join(getProjectCacheDir(req.params.id), 'project_v3.json');
+        if (fs.existsSync(projectPath)) {
+            const cached = JSON.parse(fs.readFileSync(projectPath, 'utf-8'));
+            if (cached.messages && doc.messages) {
+                for (let mi = 0; mi < doc.messages.length; mi++) {
+                    const cachedMsg = cached.messages[mi];
+                    if (!cachedMsg?.paragraphs) continue;
+                    if (!doc.messages[mi].paragraphs) continue;
+                    for (let pi = 0; pi < doc.messages[mi].paragraphs.length; pi++) {
+                        const cachedPara = cachedMsg.paragraphs[pi];
+                        if (!cachedPara) continue;
+                        const para = doc.messages[mi].paragraphs[pi];
+                        // Merge render data from cache
+                        if (cachedPara.audioUrl) para.audioUrl = cachedPara.audioUrl;
+                        if (cachedPara.audioFile) para.audioFile = cachedPara.audioFile;
+                        if (cachedPara.audioPath) para.audioPath = cachedPara.audioPath;
+                        if (cachedPara.renderHash) para.renderHash = cachedPara.renderHash;
+                        if (cachedPara.voice) para.voice = cachedPara.voice;
+                        if (cachedPara.speed) para.speed = cachedPara.speed;
+                        if (cachedPara.words) para.words = cachedPara.words;
+                        if (cachedPara.durationMs) para.durationMs = cachedPara.durationMs;
+                        if (cachedPara.alignComplete !== undefined) para.alignComplete = cachedPara.alignComplete;
+                        if (cachedPara.alignVersion) para.alignVersion = cachedPara.alignVersion;
+                    }
+                }
+            }
+        }
+        return res.json(doc);
+    }
+
+    // v2 projects: merge render cache from deck.json
     const deckPath = path.join(getProjectCacheDir(req.params.id), 'deck.json');
     if (fs.existsSync(deckPath)) {
         const cached = JSON.parse(fs.readFileSync(deckPath, 'utf-8'));
@@ -257,6 +303,10 @@ app.put('/api/projects/:id', (req, res) => {
         _id: req.params.id,
         updatedAt: Date.now()
     };
+    // Preserve version from existing if not in body
+    if (!req.body.version && existing.version) {
+        updated.version = existing.version;
+    }
     db.update(req.params.id, updated);
     res.json({ status: 'updated' });
 });
@@ -332,6 +382,66 @@ app.post('/api/generate-deck', async (req, res) => {
         res.end();
     } catch (err) {
         console.error('[Server] Generate deck failed:', err.message);
+        send('error', { message: err.message });
+        res.end();
+    } finally {
+        clearInterval(heartbeat);
+    }
+});
+
+// ─── v3 Generate Deck (Paragraph Architecture) ─────────────
+app.post('/api/v3/generate-deck', async (req, res) => {
+    const arenaData = req.body;
+    if (!arenaData || !Array.isArray(arenaData.messages)) {
+        return res.status(400).json({ error: 'Invalid Arena export: missing messages array' });
+    }
+
+    const accept = (req.headers['accept'] || '').toLowerCase();
+    const useSSE = accept.includes('text/event-stream');
+
+    if (!useSSE) {
+        try {
+            console.log(`[Server] v3 Generate: ${arenaData.messages.length} messages`);
+            const project = await buildProject(arenaData, null, null, { useLLM: true });
+            res.json(project);
+        } catch (err) {
+            console.error('[Server] v3 Generate failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+        return;
+    }
+
+    // SSE progress mode
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    });
+    if (res.flushHeaders) res.flushHeaders();
+    if (res.socket) res.socket.setNoDelay(true);
+
+    const send = (event, data) => {
+        res.write(`event: ${event}\n`);
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+        if (res.flush) res.flush();
+    };
+
+    const heartbeat = setInterval(() => {
+        try { res.write(': heartbeat\n\n'); } catch {}
+    }, 15000);
+
+    try {
+        console.log(`[Server] v3 Generate (SSE): ${arenaData.messages.length} messages`);
+        const project = await buildProject(arenaData, null, (stage, message, pct) => {
+            send('progress', { stage, message, pct });
+        }, { useLLM: true });
+        const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
+        send('done', { messageCount: project.messages.length, paragraphCount: totalParagraphs });
+        send('result', project);
+        res.end();
+    } catch (err) {
+        console.error('[Server] v3 Generate failed:', err.message);
         send('error', { message: err.message });
         res.end();
     } finally {
@@ -527,7 +637,7 @@ app.post('/api/render-deck/:id', async (req, res) => {
                 voice: voiceConfig.voice,
                 speed: voiceConfig.speed,
                 byteLength: audioBuffer.length,
-                renderHash: renderHash
+                renderHash
             };
 
             cacheMeta[i] = renderHash;
@@ -613,6 +723,267 @@ app.post('/api/render-deck/:id', async (req, res) => {
         res.json(deck);
     } catch (err) {
         console.error('[Server] Render failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── v3 Render Deck (Paragraph Architecture) ───────────────
+
+app.post('/api/v3/render-deck/:id', async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const project = req.body;
+        if (!project || !project.messages || !Array.isArray(project.messages)) {
+            return res.status(400).json({ error: 'Invalid v3 project: missing messages array' });
+        }
+        if (project.version !== 3) {
+            return res.status(400).json({ error: `Expected version 3, got ${project.version}` });
+        }
+
+        const cacheDir = getProjectCacheDir(projectId);
+        const projectPath = path.join(cacheDir, 'project_v3.json');
+
+        // Load previous render for cache comparison
+        let prevProject = null;
+        if (fs.existsSync(projectPath)) {
+            try { prevProject = JSON.parse(fs.readFileSync(projectPath, 'utf-8')); } catch {}
+        }
+
+        // TTS: generate audio for each paragraph that needs it
+        let ttsGenerated = 0;
+        let ttsCached = 0;
+        for (let msgIdx = 0; msgIdx < project.messages.length; msgIdx++) {
+            const msg = project.messages[msgIdx];
+            const role = msg.speaker || 'narrator';
+            const voiceConfig = project.voiceMapping?.[role] || project.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
+
+            for (let paraIdx = 0; paraIdx < msg.paragraphs.length; paraIdx++) {
+                const para = msg.paragraphs[paraIdx];
+                if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
+
+                const renderHash = computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed);
+                const audioFile = `msg_${msgIdx}_p_${paraIdx}_${renderHash}.mp3`;
+                const audioPath = path.join(cacheDir, audioFile);
+                const audioUrl = `/cache/audio/${projectId}/${audioFile}`;
+
+                // Check cache: same renderHash and file exists
+                const prevPara = prevProject?.messages?.[msgIdx]?.paragraphs?.[paraIdx];
+                if (prevPara?.renderHash === renderHash && fs.existsSync(audioPath)) {
+                    para.audioFile = audioFile;
+                    para.audioPath = audioPath;
+                    para.audioUrl = audioUrl;
+                    para.renderHash = renderHash;
+                    para.voice = voiceConfig.voice;
+                    para.speed = voiceConfig.speed;
+                    // Preserve existing alignment if hash matches
+                    if (prevPara.words?.length > 0 && prevPara.alignVersion === ALIGNMENT_VERSION) {
+                        para.words = prevPara.words;
+                        para.durationMs = prevPara.durationMs;
+                        para.alignComplete = prevPara.alignComplete;
+                        para.alignVersion = prevPara.alignVersion;
+                    }
+                    ttsCached++;
+                    continue;
+                }
+
+                // Generate TTS
+                console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: generating TTS...`);
+                const ttsUrl = `${process.env.NSPEECH_URL}/tts?` + new URLSearchParams({
+                    text: para.text,
+                    voice_name: voiceConfig.voice,
+                    speed: (voiceConfig.speed || 1.0).toString(),
+                    output_format: 'mp3'
+                }).toString();
+
+                const ttsRes = await fetch(ttsUrl);
+                if (!ttsRes.ok) {
+                    console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} TTS failed: HTTP ${ttsRes.status}`);
+                    para.renderHash = renderHash;
+                    para.ttsError = `TTS HTTP ${ttsRes.status}`;
+                    continue;
+                }
+
+                const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
+                fs.writeFileSync(audioPath, audioBuffer);
+
+                para.audioFile = audioFile;
+                para.audioPath = audioPath;
+                para.audioUrl = audioUrl;
+                para.renderHash = renderHash;
+                para.voice = voiceConfig.voice;
+                para.speed = voiceConfig.speed;
+                para.byteLength = audioBuffer.length;
+                ttsGenerated++;
+            }
+        }
+
+        // Save intermediate state (TTS done, alignment pending)
+        fs.writeFileSync(projectPath, JSON.stringify(project, null, 2), 'utf-8');
+
+        // Alignment: run nVoice on each paragraph that has audio but no words
+        let nVoiceAvailable = false;
+        try {
+            const nvRes = await fetch(process.env.NVOICE_URL, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
+            nVoiceAvailable = nvRes.ok;
+        } catch {}
+
+        let alignAttempted = 0;
+        let alignSucceeded = 0;
+
+        if (nVoiceAvailable) {
+            console.log(`[v3 Render] ${ttsGenerated} generated, ${ttsCached} cached. Running alignment...`);
+
+            for (let msgIdx = 0; msgIdx < project.messages.length; msgIdx++) {
+                const msg = project.messages[msgIdx];
+                for (let paraIdx = 0; paraIdx < msg.paragraphs.length; paraIdx++) {
+                    const para = msg.paragraphs[paraIdx];
+                    if (!para.audioPath || para.ttsError) continue;
+                    if (!fs.existsSync(para.audioPath)) continue;
+                    if (para.alignVersion === ALIGNMENT_VERSION && para.words?.length > 0) continue;
+
+                    alignAttempted++;
+                    try {
+                        const alignRes = await alignParagraph(para, msgIdx, paraIdx);
+                        if (alignRes) {
+                            para.words = alignRes.words;
+                            para.durationMs = alignRes.durationMs;
+                            para.alignComplete = alignRes.alignComplete;
+                            para.alignVersion = ALIGNMENT_VERSION;
+                            alignSucceeded++;
+                            console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: aligned ${alignRes.words.length} words`);
+                        }
+                    } catch (err) {
+                        console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} alignment failed:`, err.message);
+                        para.alignError = err.message;
+                    }
+                }
+            }
+            console.log(`[v3 Render] Alignment complete: ${alignSucceeded}/${alignAttempted} succeeded`);
+        } else {
+            console.log(`[v3 Render] ${ttsGenerated} generated, ${ttsCached} cached. nVoice unavailable — skipping alignment.`);
+        }
+
+        // Save final state with alignment data
+        fs.writeFileSync(projectPath, JSON.stringify(project, null, 2), 'utf-8');
+
+        // Persist to nDB
+        if (db) {
+            const existing = db.get(projectId);
+            if (existing) {
+                db.update(projectId, {
+                    ...existing,
+                    version: 3,
+                    messages: project.messages,
+                    voiceMapping: project.voiceMapping,
+                    source: project.source,
+                    updatedAt: Date.now()
+                });
+            }
+        }
+
+        const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
+        console.log(`[v3 Render] Complete for ${projectId}: ${ttsGenerated} TTS generated, ${ttsCached} cached, ${totalParagraphs} paragraphs, ${alignSucceeded} aligned`);
+        res.json(project);
+    } catch (err) {
+        console.error('[Server] v3 Render failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── v3 Render Single Paragraph ────────────────────────────
+
+app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
+    try {
+        const { id: projectId, msgIdx, paraIdx } = req.params;
+        const mi = parseInt(msgIdx, 10);
+        const pi = parseInt(paraIdx, 10);
+
+        if (!db) return res.status(500).json({ error: 'Database not available' });
+        const doc = db.get(projectId);
+        if (!doc) return res.status(404).json({ error: 'Project not found' });
+        if (doc.version !== 3) return res.status(400).json({ error: 'Not a v3 project' });
+
+        const msg = doc.messages?.[mi];
+        if (!msg) return res.status(400).json({ error: `Invalid message index: ${mi}` });
+        const para = msg.paragraphs?.[pi];
+        if (!para) return res.status(400).json({ error: `Invalid paragraph index: ${pi}` });
+
+        const cacheDir = getProjectCacheDir(projectId);
+        const role = msg.speaker || 'narrator';
+        const voiceConfig = doc.voiceMapping?.[role] || doc.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
+        const renderHash = computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed);
+        const audioFile = `msg_${mi}_p_${pi}_${renderHash}.mp3`;
+        const audioPath = path.join(cacheDir, audioFile);
+        const audioUrl = `/cache/audio/${projectId}/${audioFile}`;
+
+        // Generate TTS
+        console.log(`[v3 Render] Re-rendering msg${mi}/p${pi}...`);
+        const ttsUrl = `${process.env.NSPEECH_URL}/tts?` + new URLSearchParams({
+            text: para.text,
+            voice_name: voiceConfig.voice,
+            speed: (voiceConfig.speed || 1.0).toString(),
+            output_format: 'mp3'
+        }).toString();
+
+        const ttsRes = await fetch(ttsUrl);
+        if (!ttsRes.ok) {
+            return res.status(502).json({ error: `TTS failed: HTTP ${ttsRes.status}` });
+        }
+
+        const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
+        fs.writeFileSync(audioPath, audioBuffer);
+
+        para.audioFile = audioFile;
+        para.audioPath = audioPath;
+        para.audioUrl = audioUrl;
+        para.renderHash = renderHash;
+        para.voice = voiceConfig.voice;
+        para.speed = voiceConfig.speed;
+        para.byteLength = audioBuffer.length;
+
+        // Clear old alignment data
+        delete para.words;
+        delete para.durationMs;
+        delete para.alignComplete;
+        delete para.alignVersion;
+        delete para.alignError;
+
+        // Run alignment
+        let nVoiceAvailable = false;
+        try {
+            const nvRes = await fetch(process.env.NVOICE_URL, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
+            nVoiceAvailable = nvRes.ok;
+        } catch {}
+
+        if (nVoiceAvailable) {
+            try {
+                const alignRes = await alignParagraph(para, mi, pi);
+                if (alignRes) {
+                    para.words = alignRes.words;
+                    para.durationMs = alignRes.durationMs;
+                    para.alignComplete = alignRes.alignComplete;
+                    para.alignVersion = ALIGNMENT_VERSION;
+                    console.log(`[v3 Render] msg${mi}/p${pi}: aligned ${alignRes.words.length} words`);
+                }
+            } catch (err) {
+                console.error(`[v3 Render] msg${mi}/p${pi} alignment failed:`, err.message);
+                para.alignError = err.message;
+            }
+        }
+
+        // Save updated project
+        const projectPath = path.join(cacheDir, 'project_v3.json');
+        fs.writeFileSync(projectPath, JSON.stringify(doc, null, 2), 'utf-8');
+
+        // Update nDB
+        db.update(projectId, {
+            ...doc,
+            updatedAt: Date.now()
+        });
+
+        res.json(para);
+    } catch (err) {
+        console.error('[Server] v3 render-paragraph failed:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
@@ -838,6 +1209,69 @@ async function alignSingleSlide(slide, slideIndex) {
             alignedWordCount,
             alignComplete
         };
+    } catch (err) {
+        clearTimeout(timeout);
+        if (err.name === 'AbortError') {
+            throw new Error('nVoice alignment timed out after 60s');
+        }
+        throw err;
+    }
+}
+
+async function alignParagraph(paragraph, msgIdx, paraIdx) {
+    const text = paragraph.text;
+    if (!text || !text.trim()) return null;
+    if (!paragraph.audioPath || !fs.existsSync(paragraph.audioPath)) return null;
+
+    // Strip *emphasis* markers for alignment
+    const spokenText = text.replace(/\*([^*]+)\*/g, '$1');
+    const audioBuffer = fs.readFileSync(paragraph.audioPath);
+    const url = `${process.env.NVOICE_URL}/align?text=${encodeURIComponent(spokenText)}`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: audioBuffer,
+            signal: controller.signal,
+            agent: tlsAgent
+        });
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+            throw new Error(`nVoice alignment failed: HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (!Array.isArray(data.segments) || data.segments.length === 0) return null;
+
+        const rawWords = [];
+        let previousWord = null;
+        for (const seg of data.segments) {
+            if (!Array.isArray(seg.words)) continue;
+            for (const w of seg.words) {
+                const word = {
+                    word: String(w.word).trim(),
+                    startMs: Math.round(w.start * 1000),
+                    endMs: Math.round(w.end * 1000),
+                    probability: w.probability || 1.0
+                };
+                if (isImmediateDuplicateWord(previousWord, word)) continue;
+                rawWords.push(word);
+                previousWord = word;
+            }
+        }
+        if (rawWords.length === 0) return null;
+
+        const durationMs = rawWords[rawWords.length - 1].endMs;
+        const sourceWordCount = spokenText.split(/\s+/).filter(w => w.length > 0).length;
+        const alignedWordCount = rawWords.length;
+        const alignComplete = alignedWordCount >= Math.floor(sourceWordCount * 0.85);
+
+        return { words: rawWords, durationMs, sourceWordCount, alignedWordCount, alignComplete };
     } catch (err) {
         clearTimeout(timeout);
         if (err.name === 'AbortError') {

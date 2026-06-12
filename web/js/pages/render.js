@@ -32,6 +32,144 @@ nui.registerPage('render', {
         await loadProject(projectId);
         if (!deck) return;
 
+        // ─── v3 Paragraph Architecture ─────────────────────────────
+        // v3 projects store messages with paragraphs instead of slides.
+        // We build "virtual slides" at runtime by grouping paragraphs
+        // into visual chunks (~600 chars per slide). Audio chains across
+        // paragraphs within a virtual slide.
+        const isV3 = deck.version === 3 && deck.messages;
+        let virtualSlides = null;
+
+        function buildVirtualSlides() {
+            if (!isV3) return null;
+            const slides = [];
+            const MAX_CHARS_PER_SLIDE = 600;
+
+            // Opening: setup slide
+            slides.push({
+                type: 'setup',
+                text: 'LLM Chat Arena',
+                narration: 'An autonomous conversation between two AI models.',
+                speaker: 'narrator',
+                _virtual: true
+            });
+
+            // Details slide
+            const source = deck.source || {};
+            const models = (source.participants || []).map((name, i) => ({
+                name,
+                role: i === 0 ? 'participantA' : 'participantB'
+            }));
+            slides.push({
+                type: 'details',
+                text: source.topic || 'Untitled',
+                narration: source.topic || 'Untitled',
+                speaker: 'narrator',
+                meta: {
+                    recordedAt: source.exportedAt,
+                    renderedAt: source.renderedAt,
+                    models,
+                    turnCount: deck.messages.length
+                },
+                _virtual: true
+            });
+
+            // Topic slide — speak the seed prompt
+            slides.push({
+                type: 'topic',
+                text: source.seedPromptRaw || source.seedPrompt || source.topic || '',
+                narration: source.seedPromptRaw || source.seedPrompt || source.topic || '',
+                speaker: 'narrator',
+                _virtual: true
+            });
+
+            // Conversation: group paragraphs into virtual slides
+            for (let msgIdx = 0; msgIdx < deck.messages.length; msgIdx++) {
+                const msg = deck.messages[msgIdx];
+                const paragraphs = msg.paragraphs || [];
+                const speaker = msg.speaker || 'narrator';
+                const label = msg.label || msg.originalSpeaker || speaker;
+
+                // First pass: collect groups
+                const groups = [];
+                let currentGroup = [];
+                let currentChars = 0;
+
+                for (let paraIdx = 0; paraIdx < paragraphs.length; paraIdx++) {
+                    const para = paragraphs[paraIdx];
+                    const paraLen = (para.text || '').length;
+
+                    if (currentGroup.length > 0 && currentChars + paraLen > MAX_CHARS_PER_SLIDE) {
+                        groups.push(currentGroup);
+                        currentGroup = [];
+                        currentChars = 0;
+                    }
+
+                    currentGroup.push({ paraIdx, para });
+                    currentChars += paraLen;
+                }
+                if (currentGroup.length > 0) groups.push(currentGroup);
+
+                // Second pass: build slides with splitIdx/splitCount
+                for (let splitIdx = 0; splitIdx < groups.length; splitIdx++) {
+                    slides.push(buildConversationSlide(groups[splitIdx], msgIdx, speaker, label, msg, splitIdx, groups.length));
+                }
+            }
+
+            // End slide
+            slides.push({
+                type: 'end',
+                text: 'End of conversation.',
+                narration: 'End of conversation.',
+                speaker: 'narrator',
+                _virtual: true
+            });
+
+            return slides;
+        }
+
+        function buildConversationSlide(group, msgIdx, speaker, label, msg, splitIdx, splitCount) {
+            const firstPara = group[0];
+            const lastPara = group[group.length - 1];
+            const text = group.map(g => g.para.text || '').join('\n\n');
+            const paragraphs = group.map(g => ({
+                msgIdx,
+                paraIdx: g.paraIdx,
+                text: g.para.text,
+                audioUrl: g.para.audioUrl,
+                words: g.para.words,
+                durationMs: g.para.durationMs,
+                renderHash: g.para.renderHash,
+                alignComplete: g.para.alignComplete,
+                alignVersion: g.para.alignVersion
+            }));
+
+            return {
+                type: 'conversation',
+                text,
+                speaker,
+                label,
+                originalIdx: msgIdx,
+                createdAt: msg.createdAt,
+                splitIdx,
+                splitCount,
+                _virtual: true,
+                _paragraphs: paragraphs,
+                // For staleness check
+                tts: {
+                    audioUrl: paragraphs[0]?.audioUrl,
+                    renderHash: paragraphs.map(p => p.renderHash).join('|'),
+                    durationMs: paragraphs.reduce((sum, p) => sum + (p.durationMs || 0), 0)
+                }
+            };
+        }
+
+        if (isV3) {
+            virtualSlides = buildVirtualSlides();
+            // Replace deck.slides with virtual slides for v2-compatible rendering
+            deck.slides = virtualSlides;
+        }
+
         const slideList = element.querySelector('#render-slide-list');
         const playerContent = element.querySelector('#player-slide-content');
         const progressBar = element.querySelector('#playback-progress-bar');
@@ -48,7 +186,46 @@ nui.registerPage('render', {
         let audio = new Audio();
         let rafId = null;
 
+        // v3 audio chaining state
+        // Each paragraph plays independently. No offset math.
+        // currentParaIdx tracks which paragraph is playing.
+        // Cumulative time is tracked for progress bar and time display.
+        let v3Paragraphs = [];      // paragraphs array from the current slide
+        let currentParaIdx = -1;    // which paragraph is currently playing (-1 = none)
+        let v3CumulativeMs = 0;     // total ms of all finished paragraphs
+        let v3TotalDurationMs = 0;  // total duration of all paragraphs combined
+
+        function loadParagraphAudio(paragraphs) {
+            v3Paragraphs = paragraphs || [];
+            currentParaIdx = -1;
+            v3CumulativeMs = 0;
+            v3TotalDurationMs = 0;
+
+            for (const para of v3Paragraphs) {
+                v3TotalDurationMs += para.durationMs || 0;
+            }
+
+            // Find first paragraph with audio
+            const first = v3Paragraphs.find(p => p.audioUrl && p.words?.length > 0);
+            if (first) {
+                currentParaIdx = v3Paragraphs.indexOf(first);
+                audio.src = first.audioUrl;
+                audio.playbackRate = playbackSpeed;
+            } else {
+                audio.src = '';
+            }
+        }
+
         function computeStaleness(slide) {
+            // v3: check paragraph render state
+            if (slide._paragraphs) {
+                if (slide._paragraphs.length === 0) return 'unrendered';
+                const hasAnyAudio = slide._paragraphs.some(p => p.audioUrl);
+                if (!hasAnyAudio) return 'unrendered';
+                const allAligned = slide._paragraphs.every(p => p.alignComplete && p.words?.length > 0);
+                return allAligned ? 'fresh' : 'stale';
+            }
+            // v2: original logic
             if (!slide.tts || slide.tts.error) return 'unrendered';
             const text = getSpokenText(slide);
             const roleCfg = deck.voiceMapping[slide.speaker] || deck.voiceMapping.narrator || {};
@@ -392,6 +569,11 @@ nui.registerPage('render', {
         }
 
         async function renderSingleSlide(idx) {
+            // v3: individual slide render not supported (slides are virtual)
+            if (isV3) {
+                nui.components.banner.show({ content: 'Use "Render All" for v3 projects', priority: 'info', autoClose: 3000 });
+                return;
+            }
             renderingSlides.add(idx);
             renderSlideList();
 
@@ -415,6 +597,10 @@ nui.registerPage('render', {
         }
 
         async function renderAllSlides() {
+            if (isV3) {
+                return await renderAllV3();
+            }
+            // v2: original per-slide render
             const slides = deck.slides;
             const toRender = [];
             for (let i = 0; i < slides.length; i++) {
@@ -453,9 +639,44 @@ nui.registerPage('render', {
             }
         }
 
+        async function renderAllV3() {
+            // Mark all slides as rendering
+            for (let i = 0; i < deck.slides.length; i++) renderingSlides.add(i);
+            renderSlideList();
+
+            try {
+                const res = await fetch(`/api/v3/render-deck/${projectId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(deck)
+                });
+                if (!res.ok) throw new Error((await res.json()).error || 'Render failed');
+                const rendered = await res.json();
+
+                // Update deck with rendered data
+                deck.messages = rendered.messages;
+                deck.voiceMapping = rendered.voiceMapping;
+                window.SLIDESHOW_APP.deck = deck;
+
+                // Rebuild virtual slides with new render data
+                virtualSlides = buildVirtualSlides();
+                deck.slides = virtualSlides;
+
+                nui.components.banner.show({ content: `Render complete: ${deck.messages.length} messages`, priority: 'success', autoClose: 3000 });
+            } catch (err) {
+                nui.components.banner.show({ content: `Render failed: ${err.message}`, priority: 'alert', autoClose: 5000 });
+            } finally {
+                renderingSlides = new Set();
+                renderSlideList();
+                loadSlide(currentSlideIdx);
+            }
+        }
+
         function loadSlide(idx) {
             if (!deck.slides || idx < 0 || idx >= deck.slides.length) return;
             currentSlideIdx = idx;
+            currentParaIdx = -1;
+            v3CumulativeMs = 0;
             const slide = deck.slides[idx];
 
             // Update list highlighting. The selected row gets an accent
@@ -545,7 +766,7 @@ nui.registerPage('render', {
                     html += `<div class="slide-body words-container">${buildWordSpans(slide.narration, slide.tts)}</div>`;
                 }
             } else {
-                html += `<div class="slide-body words-container">${buildWordSpans(slide.text || slide.narration || '', slide.tts)}</div>`;
+                html += `<div class="slide-body words-container">${buildWordSpans(slide.text || slide.narration || '', slide.tts, slide._paragraphs)}</div>`;
             }
 
             html += `</div>`;
@@ -554,7 +775,10 @@ nui.registerPage('render', {
 
             // Load audio if rendered
             const tts = slide.tts;
-            if (tts && !tts.error && tts.audioUrl) {
+            if (slide._paragraphs && slide._paragraphs.length > 0) {
+                // v3: chain paragraph audios
+                loadParagraphAudio(slide._paragraphs);
+            } else if (tts && !tts.error && tts.audioUrl) {
                 audio.src = tts.audioUrl;
                 audio.playbackRate = playbackSpeed;
             } else {
@@ -566,7 +790,31 @@ nui.registerPage('render', {
             updateTimeDisplay(0, tts?.durationMs || 0);
         }
 
-        function buildWordSpans(text, tts) {
+        function buildWordSpans(text, tts, paragraphs) {
+            // v3: build word spans per-paragraph, each with local timing (no offsets)
+            if (paragraphs && paragraphs.length > 0) {
+                const allSpans = [];
+                for (let pi = 0; pi < paragraphs.length; pi++) {
+                    const para = paragraphs[pi];
+                    const wordSpans = [];
+                    if (para.words && para.words.length > 0) {
+                        for (const w of para.words) {
+                            wordSpans.push(
+                                `<span class="word future" data-start="${w.startMs}" data-end="${w.endMs}">${escapeHtml(w.word)}</span> `
+                            );
+                        }
+                    }
+                    // Wrap this paragraph's words in a container with para index
+                    allSpans.push(`<span class="para-words" data-para-idx="${pi}">${wordSpans.join('')}</span>`);
+                    // Visual paragraph break between paragraphs (not after the last one)
+                    if (pi < paragraphs.length - 1) {
+                        allSpans.push('<span class="para-break"></span>');
+                    }
+                }
+                return allSpans.join('');
+            }
+
+            // v2: original logic
             const timedWords = getTimedWords(tts);
             if (timedWords.length > 0) {
                 return timedWords.map(w =>
@@ -591,6 +839,42 @@ nui.registerPage('render', {
         }
 
         function updateWordHighlight(currentTimeMs) {
+            const slide = deck?.slides?.[currentSlideIdx];
+
+            // v3: per-paragraph highlighting using local timing
+            if (slide?._paragraphs && currentParaIdx >= 0) {
+                const paraContainers = playerContent.querySelectorAll('.para-words');
+                paraContainers.forEach(container => {
+                    const pi = parseInt(container.dataset.paraIdx, 10);
+                    const words = container.querySelectorAll('.word');
+
+                    if (pi < currentParaIdx) {
+                        // Past paragraph — all words are past
+                        words.forEach(el => { el.className = 'word past'; });
+                    } else if (pi === currentParaIdx) {
+                        // Current paragraph — use local audio time
+                        words.forEach(el => {
+                            const startMs = parseFloat(el.dataset.start);
+                            const endMs = parseFloat(el.dataset.end);
+                            if (isNaN(startMs) || isNaN(endMs)) {
+                                el.className = 'word future';
+                            } else if (currentTimeMs >= startMs && currentTimeMs < endMs) {
+                                el.className = 'word active';
+                            } else if (currentTimeMs >= endMs) {
+                                el.className = 'word past';
+                            } else {
+                                el.className = 'word future';
+                            }
+                        });
+                    } else {
+                        // Future paragraph — all words are future
+                        words.forEach(el => { el.className = 'word future'; });
+                    }
+                });
+                return;
+            }
+
+            // v2: original global highlighting
             const wordEls = playerContent.querySelectorAll('.words-container .word');
             if (wordEls.length === 0) return;
 
@@ -599,7 +883,6 @@ nui.registerPage('render', {
                 const endMs = parseFloat(el.dataset.end);
 
                 if (isNaN(startMs) || isNaN(endMs)) {
-                    // No timing data — don't highlight
                     el.className = 'word future';
                     return;
                 }
@@ -615,8 +898,8 @@ nui.registerPage('render', {
         }
 
         function updateProgress(currentTimeMs) {
-            const tts = deck?.slides[currentSlideIdx]?.tts;
-            const duration = tts?.durationMs || (audio.duration * 1000) || 0;
+            const slide = deck?.slides?.[currentSlideIdx];
+            const duration = slide?.tts?.durationMs || (audio.duration * 1000) || 0;
             const pct = duration > 0 ? (currentTimeMs / duration) * 100 : 0;
             progressFill.style.width = Math.min(pct, 100) + '%';
         }
@@ -631,7 +914,13 @@ nui.registerPage('render', {
         }
 
         function updateControls() {
-            const tts = deck?.slides?.[currentSlideIdx]?.tts;
+            const slide = deck?.slides?.[currentSlideIdx];
+            // v3: check if any paragraph has audio
+            if (slide?._paragraphs) {
+                btnPlay.disabled = !slide._paragraphs.some(p => p.audioUrl);
+                return;
+            }
+            const tts = slide?.tts;
             btnPlay.disabled = !tts || !tts.audioUrl;
         }
 
@@ -640,12 +929,22 @@ nui.registerPage('render', {
                 rafId = null;
                 return;
             }
-            const currentTimeMs = audio.currentTime * 1000;
-            const tts = deck?.slides[currentSlideIdx]?.tts;
-            const durationMs = tts?.durationMs || (audio.duration * 1000) || 0;
-            updateWordHighlight(currentTimeMs);
-            updateProgress(currentTimeMs);
-            updateTimeDisplay(currentTimeMs, durationMs);
+            const slide = deck?.slides?.[currentSlideIdx];
+            const localTimeMs = audio.currentTime * 1000;
+
+            if (slide?._paragraphs) {
+                // v3: local time for current paragraph, cumulative for progress
+                const totalElapsedMs = v3CumulativeMs + localTimeMs;
+                updateWordHighlight(localTimeMs);
+                updateProgress(totalElapsedMs);
+                updateTimeDisplay(totalElapsedMs, v3TotalDurationMs);
+            } else {
+                // v2: global time
+                const durationMs = slide?.tts?.durationMs || (audio.duration * 1000) || 0;
+                updateWordHighlight(localTimeMs);
+                updateProgress(localTimeMs);
+                updateTimeDisplay(localTimeMs, durationMs);
+            }
             rafId = requestAnimationFrame(animationLoop);
         }
 
@@ -673,7 +972,33 @@ nui.registerPage('render', {
             stopLoop();
         });
         audio.addEventListener('ended', () => {
-            isPlaying = false;
+            const slide = deck?.slides?.[currentSlideIdx];
+
+            // v3: chain to next paragraph
+            if (slide?._paragraphs && currentParaIdx >= 0) {
+                // Accumulate finished paragraph's duration
+                v3CumulativeMs += v3Paragraphs[currentParaIdx]?.durationMs || 0;
+
+                // Find next paragraph with audio
+                let nextIdx = -1;
+                for (let i = currentParaIdx + 1; i < v3Paragraphs.length; i++) {
+                    if (v3Paragraphs[i].audioUrl && v3Paragraphs[i].words?.length > 0) {
+                        nextIdx = i;
+                        break;
+                    }
+                }
+
+                if (nextIdx >= 0) {
+                    currentParaIdx = nextIdx;
+                    audio.src = v3Paragraphs[nextIdx].audioUrl;
+                    audio.playbackRate = playbackSpeed;
+                    audio.play().catch(() => {});
+                    return;
+                }
+                // No more paragraphs — fall through to slide advance
+            }
+
+            // All paragraphs done (or v2 slide ended)
             const innerBtn = btnPlay.querySelector('button');
             const icon = btnPlay.querySelector('nui-icon');
             if (icon) icon.setAttribute('name', 'play');
@@ -726,8 +1051,31 @@ nui.registerPage('render', {
             if (!audio.src) return;
             const rect = progressBar.getBoundingClientRect();
             const pct = (e.clientX - rect.left) / rect.width;
-            const tts = deck?.slides[currentSlideIdx]?.tts;
-            const duration = tts?.durationMs || (audio.duration * 1000) || 0;
+            const slide = deck?.slides?.[currentSlideIdx];
+
+            // v3: find which paragraph the click lands in
+            if (slide?._paragraphs && v3Paragraphs.length > 0) {
+                const targetMs = pct * v3TotalDurationMs;
+                let cumMs = 0;
+                for (let i = 0; i < v3Paragraphs.length; i++) {
+                    const paraDur = v3Paragraphs[i].durationMs || 0;
+                    if (cumMs + paraDur > targetMs || i === v3Paragraphs.length - 1) {
+                        // Click is in this paragraph
+                        currentParaIdx = i;
+                        v3CumulativeMs = cumMs;
+                        audio.src = v3Paragraphs[i].audioUrl;
+                        audio.playbackRate = playbackSpeed;
+                        const withinPara = Math.max(0, targetMs - cumMs);
+                        audio.currentTime = withinPara / 1000;
+                        break;
+                    }
+                    cumMs += paraDur;
+                }
+                return;
+            }
+
+            // v2
+            const duration = slide?.tts?.durationMs || (audio.duration * 1000) || 0;
             audio.currentTime = (pct * duration) / 1000;
         });
 
@@ -749,14 +1097,19 @@ nui.registerPage('render', {
         element.show = (newParams) => {
             if (newParams && newParams.id && newParams.id !== projectId) {
                 projectId = newParams.id;
-                // Reset playback state for the new project
                 audio.pause();
                 audio.src = '';
                 currentSlideIdx = 0;
+                currentParaIdx = -1;
+                v3CumulativeMs = 0;
                 isPlaying = false;
                 renderingSlides = new Set();
                 loadProject(projectId).then(() => {
                     if (deck) {
+                        if (isV3) {
+                            virtualSlides = buildVirtualSlides();
+                            deck.slides = virtualSlides;
+                        }
                         renderSlideList();
                         loadSlide(0);
                     }

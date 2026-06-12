@@ -168,7 +168,15 @@ nui.registerPage('editor', {
 
         // ─── Slide rendering ───────────────────────────────
         const slideDeck = element.querySelector('#slide-deck');
+        const isV3 = deck.version === 3 && deck.messages;
+
         function renderSlides() {
+            if (isV3) {
+                renderV3Messages();
+                return;
+            }
+
+            // v2: original slide rendering
             const slides = deck.slides || [];
             if (slides.length === 0) {
                 slideDeck.innerHTML = `
@@ -234,6 +242,69 @@ nui.registerPage('editor', {
                     });
                 });
             });
+        }
+
+        function renderV3Messages() {
+            const messages = deck.messages || [];
+            if (messages.length === 0) {
+                slideDeck.innerHTML = `
+                    <nui-card>
+                        <div class="empty-state">
+                            <p>No messages yet.</p>
+                            <p>Click "Generate with AI" to process the conversation.</p>
+                        </div>
+                    </nui-card>
+                `;
+                return;
+            }
+
+            const totalParagraphs = messages.reduce((s, m) => s + (m.paragraphs?.length || 0), 0);
+            slideDeck.innerHTML = `
+                <nui-card>
+                    <div style="display: flex; justify-content: space-between; align-items: center; gap: var(--nui-space);">
+                        <div>
+                            <strong>${messages.length} messages</strong> · ${totalParagraphs} paragraphs
+                        </div>
+                        <div style="font-size: var(--font-size-xsmall); color: var(--text-color-dim);">
+                            v3 paragraph architecture
+                        </div>
+                    </div>
+                </nui-card>
+                ${messages.map((msg, msgIdx) => {
+                    const paras = msg.paragraphs || [];
+                    const speaker = msg.label || msg.originalSpeaker || msg.speaker || 'unknown';
+                    const role = msg.speaker || 'narrator';
+                    const voiceConfig = deck.voiceMapping?.[role] || deck.voiceMapping?.narrator || {};
+                    return `
+                        <nui-card>
+                            <div class="slide-card-header">
+                                <div class="slide-card-meta">
+                                    <nui-badge variant="${role === 'participantA' ? 'info' : (role === 'participantB' ? 'warning' : 'primary')}">${escapeHtml(speaker)}</nui-badge>
+                                    <strong>Message ${msgIdx + 1}</strong>
+                                    <span class="slide-card-index">${paras.length} paragraphs</span>
+                                </div>
+                            </div>
+                            <div style="margin-top: var(--nui-space-half);">
+                                ${paras.map((para, paraIdx) => {
+                                    const hasAudio = !!para.audioUrl;
+                                    const hasWords = para.words?.length > 0;
+                                    const statusDot = hasWords
+                                        ? '<span style="width: 6px; height: 6px; border-radius: 50%; background: var(--color-highlight); display: inline-block;" title="aligned"></span>'
+                                        : (hasAudio
+                                            ? '<span style="width: 6px; height: 6px; border-radius: 50%; background: #d4a017; display: inline-block;" title="audio only"></span>'
+                                            : '<span style="width: 6px; height: 6px; border-radius: 50%; background: var(--text-color-dim); display: inline-block;" title="unrendered"></span>');
+                                    return `
+                                        <div style="padding: var(--nui-space-half) 0; ${paraIdx > 0 ? 'border-top: 1px solid var(--border-shade1);' : ''} display: flex; gap: var(--nui-space-half); align-items: flex-start;">
+                                            ${statusDot}
+                                            <span style="font-size: var(--font-size-small); color: var(--text-color); flex: 1;">${escapeHtml(para.text || '').substring(0, 200)}${(para.text || '').length > 200 ? '…' : ''}</span>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        </nui-card>
+                    `;
+                }).join('')}
+            `;
         }
 
         function isSlideStale(slide, idx) {
@@ -477,6 +548,41 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
             const [action, param] = actionPart.split(':');
 
             if (action === 'generate-deck') {
+                if (isV3) {
+                    // v3: regenerate messages from source
+                    if ((deck.messages || []).length > 0) {
+                        const ok = await nui.components.dialog.confirm(
+                            'Regenerate messages?',
+                            `This will replace the current ${deck.messages.length} messages. Continue?`,
+                            { placement: 'top' }
+                        );
+                        if (!ok) return;
+                    }
+                    actionEl.setLoading?.(true);
+                    let progressBanner = nui.components.banner.show({ content: 'Generating…', priority: 'info' });
+                    try {
+                        // Re-import from source to regenerate
+                        const res = await fetch('/api/v3/generate-deck', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(deck.source)
+                        });
+                        if (!res.ok) throw new Error('Server returned ' + res.status);
+                        const generated = await res.json();
+                        deck.messages = generated.messages || [];
+                        deck.voiceMapping = { ...deck.voiceMapping, ...generated.voiceMapping };
+                        await saveDeck();
+                        renderSlides();
+                        progressBanner.close();
+                        nui.components.banner.show({ content: `Generated ${deck.messages.length} messages`, priority: 'success', autoClose: 3000 });
+                    } catch (err) {
+                        try { progressBanner.close(); } catch {}
+                        nui.components.banner.show({ content: 'Generation failed: ' + err.message, priority: 'alert', autoClose: 5000 });
+                    } finally {
+                        actionEl.setLoading?.(false);
+                    }
+                } else {
+                // v2: original generate-deck
                 // If the deck already has slides, ask first — this
                 // action silently overwrites them. Voice mapping
                 // and source are preserved; only the generated
@@ -578,6 +684,7 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                 } finally {
                     actionEl.setLoading?.(false);
                 }
+                } // end v2 generate-deck else block
             }
 
             if (action === 'chat-send') sendChat();
