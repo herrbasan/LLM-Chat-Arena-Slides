@@ -1,9 +1,20 @@
 // pipeline/align.js
 // TTS Audio + Text → Word Timings via nVoice
-// Sends each slide's audio + original text to nVoice /transcribe for alignment.
+//
+// Supports two input formats:
+//   v2 (deck with slides): aligns each slide's audio
+//   v3 (project with messages/paragraphs): aligns each paragraph's audio
+//
+// Paragraph-level alignment is simpler and more reliable because each
+// paragraph is short (1-3 sentences), reducing STT drift.
 
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
+
+// Allow self-signed certs for nVoice (internal service).
+const tlsAgent = new https.Agent({ rejectUnauthorized: false });
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 // ─── Config ───────────────────────────────────────────────────
 
@@ -23,6 +34,11 @@ function getSlideText(slide) {
     // uses this as endpoint context and would otherwise see literal
     // "asterisk" tokens. Mirrors the server-side fix in server/server.js.
     return text ? text.toString().replace(/\*+/g, '') : text;
+}
+
+function getSpokenText(text) {
+    if (!text) return '';
+    return text.toString().replace(/\*+/g, '');
 }
 
 function normalizeWord(w) {
@@ -253,7 +269,136 @@ function alignWordsToSource(sourceText, sttWords, audioDurationMs) {
     return enforceMonotonicTimings(fillUntimedTimings(projected, audioDurationMs));
 }
 
-// ─── Alignment per Slide ──────────────────────────────────────
+// ─── v3: Paragraph-level Alignment ────────────────────────────
+
+async function alignParagraph(paragraph, msgIdx, paraIdx) {
+    const text = getSpokenText(paragraph.text);
+    if (!text || text.trim().length === 0) return null;
+
+    if (!paragraph.audioPath) return null;
+
+    if (!fs.existsSync(paragraph.audioPath)) {
+        console.error(`  [Msg ${msgIdx} Para ${paraIdx}] Audio file not found: ${paragraph.audioPath}`);
+        return null;
+    }
+
+    const audioBuffer = fs.readFileSync(paragraph.audioPath);
+    const url = `${NVOICE_URL}/transcribe?text=${encodeURIComponent(text)}`;
+
+    console.log(`  [Msg ${msgIdx} Para ${paraIdx}] "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
+    console.log(`    Audio: ${paragraph.audioFile} (${(audioBuffer.length / 1024).toFixed(1)} KB)`);
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: audioBuffer,
+        agent: tlsAgent
+    });
+
+    if (!response.ok) {
+        throw new Error(`nVoice alignment failed: HTTP ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    if (!data.segments || data.segments.length === 0) {
+        console.log(`    Warning: No segments returned from nVoice`);
+        return null;
+    }
+
+    // Collect all words across segments
+    const allWords = [];
+    for (const seg of data.segments) {
+        if (seg.words) {
+            for (const w of seg.words) {
+                allWords.push({
+                    word: w.word,
+                    start: w.start,
+                    end: w.end,
+                    probability: w.probability
+                });
+            }
+        }
+    }
+
+    if (allWords.length === 0) {
+        console.log(`    Warning: No word timings in nVoice response`);
+        return null;
+    }
+
+    const lastSegEnd = data.segments[data.segments.length - 1].end || 0;
+    const audioDurationMs = Math.round(lastSegEnd * 1000);
+
+    // For paragraphs, we use the STT words directly — they're short enough
+    // that drift is minimal. The source text and STT output should be very
+    // close for a single paragraph.
+    const alignedWords = alignWordsToSource(text, allWords, audioDurationMs);
+
+    const interpolated = alignedWords.filter(w => w.interpolated).length;
+    const matched = alignedWords.length - interpolated;
+
+    const durationMs = alignedWords.length > 0
+        ? alignedWords[alignedWords.length - 1].endMs
+        : 0;
+
+    console.log(`    Words: ${alignedWords.length} (${matched} matched${interpolated > 0 ? `, ${interpolated} interp` : ''})`);
+    console.log(`    Duration: ${(durationMs / 1000).toFixed(1)}s`);
+
+    return {
+        words: alignedWords,
+        durationMs: durationMs,
+        alignVersion: ALIGNMENT_VERSION
+    };
+}
+
+async function processProject(project, outputDir) {
+    fs.mkdirSync(outputDir, { recursive: true });
+
+    const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
+    console.log(`\n[Align v3] Processing ${project.messages.length} messages (${totalParagraphs} paragraphs)...\n`);
+
+    let successCount = 0;
+    let skipCount = 0;
+    let failCount = 0;
+
+    for (let mi = 0; mi < project.messages.length; mi++) {
+        const message = project.messages[mi];
+
+        for (let pi = 0; pi < message.paragraphs.length; pi++) {
+            const para = message.paragraphs[pi];
+
+            if (!para.audioPath || para.ttsError) {
+                skipCount++;
+                continue;
+            }
+
+            try {
+                const timingData = await alignParagraph(para, mi, pi);
+                if (timingData) {
+                    para.words = timingData.words;
+                    para.durationMs = timingData.durationMs;
+                    para.alignVersion = timingData.alignVersion;
+                    successCount++;
+                } else {
+                    skipCount++;
+                }
+            } catch (err) {
+                console.error(`  [Msg ${mi} Para ${pi}] ERROR: ${err.message}`);
+                para.alignError = err.message;
+                failCount++;
+            }
+        }
+    }
+
+    const outputPath = path.join(outputDir, 'project_v3_aligned.json');
+    fs.writeFileSync(outputPath, JSON.stringify(project, null, 2), 'utf-8');
+
+    console.log(`\n[Align v3] Complete: ${successCount} aligned, ${skipCount} skipped, ${failCount} failed`);
+    console.log(`[Align v3] Output: ${outputPath}\n`);
+
+    return project;
+}
+
+// ─── v2: Slide-level Alignment (legacy) ───────────────────────
 
 async function alignSlide(slide, slideIndex) {
     const text = getSlideText(slide);
@@ -276,7 +421,8 @@ async function alignSlide(slide, slideIndex) {
     const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
-        body: audioBuffer
+        body: audioBuffer,
+        agent: tlsAgent
     });
 
     if (!response.ok) {
@@ -386,24 +532,42 @@ async function processDeck(deckPath, outputDir) {
     return deck;
 }
 
+// ─── Auto-detect entry point ──────────────────────────────────
+
+async function processInput(inputPath, outputDir) {
+    const data = JSON.parse(fs.readFileSync(inputPath, 'utf-8'));
+
+    if (data.version === 3 && data.messages && data.messages[0]?.paragraphs) {
+        console.log('[Align] Detected v3 project (messages + paragraphs)');
+        return processProject(data, outputDir);
+    }
+
+    if (data.slides) {
+        console.log('[Align] Detected v2 deck (slides)');
+        return processDeck(inputPath, outputDir);
+    }
+
+    throw new Error('Unrecognized input format: expected v2 deck with slides or v3 project with messages.paragraphs');
+}
+
 // ─── CLI ──────────────────────────────────────────────────────
 
 async function main() {
     const args = process.argv.slice(2);
     if (args.length < 1) {
-        console.error('Usage: node pipeline/align.js <slide_deck_tts.json> [output-dir]');
+        console.error('Usage: node pipeline/align.js <project_v3_tts.json | slide_deck_tts.json> [output-dir]');
         process.exit(1);
     }
 
-    const deckPath = path.resolve(args[0]);
+    const inputPath = path.resolve(args[0]);
     const outputDir = path.resolve(args[1] || 'pipeline/output');
 
-    if (!fs.existsSync(deckPath)) {
-        console.error(`Input file not found: ${deckPath}`);
+    if (!fs.existsSync(inputPath)) {
+        console.error(`Input file not found: ${inputPath}`);
         process.exit(1);
     }
 
-    await processDeck(deckPath, outputDir);
+    await processInput(inputPath, outputDir);
 }
 
 if (require.main === module) {
@@ -413,4 +577,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { processDeck, alignWordsToSource, ALIGNMENT_VERSION };
+module.exports = { processDeck, processProject, processInput, alignWordsToSource, ALIGNMENT_VERSION };
