@@ -4,7 +4,7 @@
 
 const path = require('path');
 const { parseArenaExport } = require('./importer.js');
-const { cleanWithLLM } = require('./llm-clean.js');
+const { cleanWithLLM } = require('./build-deck.js');
 const { processDeck: ttsProcess } = require('./tts.js');
 const { processDeck: alignProcess } = require('./align.js');
 const fs = require('fs');

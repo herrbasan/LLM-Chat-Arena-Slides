@@ -21,7 +21,7 @@ try {
 }
 
 // Pipeline modules
-const { cleanWithLLM } = require('../pipeline/llm-clean.js');
+const { cleanWithLLM } = require('../pipeline/build-deck.js');
 const { parseArenaExport } = require('../pipeline/importer.js');
 const { processDeck: ttsProcess } = require('../pipeline/tts.js');
 const { processDeck: alignProcess, ALIGNMENT_VERSION } = require('../pipeline/align.js');
@@ -303,10 +303,17 @@ app.post('/api/generate-deck', async (req, res) => {
     });
     // Flush headers immediately so the client sees a connection.
     if (res.flushHeaders) res.flushHeaders();
+    // Disable Nagle's algorithm so each write is sent as a separate
+    // TCP packet — otherwise progress events batch up and the client
+    // sees them all at once.
+    if (res.socket) res.socket.setNoDelay(true);
 
     const send = (event, data) => {
         res.write(`event: ${event}\n`);
         res.write(`data: ${JSON.stringify(data)}\n\n`);
+        // Compression middleware adds a .flush() method; if present,
+        // force the write to the wire immediately.
+        if (res.flush) res.flush();
     };
 
     // Periodic keep-alive so proxies don't drop the connection.
@@ -437,12 +444,20 @@ app.post('/api/render-deck/:id', async (req, res) => {
             return res.status(400).json({ error: 'Invalid deck: missing slides array' });
         }
 
-        const cacheMeta = getSlideCacheMeta(projectId);
+        // Always start fresh — delete any cached audio from previous
+        // renders. The cleaning prompt and TTS config change too often
+        // during development for stale-cache logic to be worth the bugs.
+        const cacheDir = getProjectCacheDir(projectId);
+        if (fs.existsSync(cacheDir)) {
+            fs.rmSync(cacheDir, { recursive: true, force: true });
+        }
+        fs.mkdirSync(cacheDir, { recursive: true });
+        const cacheMeta = {};
         let reRendered = 0;
-        let cached = 0;
+        let cached = 0; // always 0 now — cache is cleared above, but keep for log lines
 
         // Load existing render cache to preserve alignment data for cache-hit slides
-        const deckPath = path.join(getProjectCacheDir(projectId), 'deck.json');
+        const deckPath = path.join(cacheDir, 'deck.json');
         let prevDeck = null;
         if (fs.existsSync(deckPath)) {
             try { prevDeck = JSON.parse(fs.readFileSync(deckPath, 'utf-8')); } catch {}

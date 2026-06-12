@@ -547,6 +547,10 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                             if (eventName === 'progress') {
                                 const pct = Math.round(data.pct || 0);
                                 progressBanner.update(`${data.message || data.stage} (${pct}%)`);
+                                // Yield to the browser so the banner repaints.
+                                // Without this, rapid SSE events all arrive in one
+                                // chunk and the user sees 0% until done.
+                                await new Promise(r => setTimeout(r, 0));
                             } else if (eventName === 'done') {
                                 // Server has finished; the 'result' event will follow
                                 // (or it already did in the same packet). No action.

@@ -17,11 +17,13 @@
 const fs = require('fs');
 const path = require('path');
 const { parseArenaExport } = require('../pipeline/importer.js');
-const { cleanWithLLM } = require('../pipeline/llm-clean.js');
+const { cleanWithLLM } = require('../pipeline/build-deck.js');
 
-const REFERENCE_PATH = process.argv[2] || path.join(__dirname, '..', 'reference',
+const args = process.argv.slice(2).filter(a => !a.startsWith('--'));
+const SKIP_CLEAN = process.argv.includes('--skip-clean');
+const REFERENCE_PATH = args[0] || path.join(__dirname, '..', 'reference',
     'arena-house_vs__grooves__being_caugh-glm5-chat-vs-minimax-m3-chat-2026-06-08.json');
-const PROJECT_ID = process.argv[3] || 'slideshow_house_vs_grooves';
+const PROJECT_ID = args[1] || 'slideshow_house_vs_grooves';
 const JSONL_PATH = path.join(__dirname, 'data', 'slideshows.jsonl');
 
 async function main() {
@@ -37,7 +39,7 @@ async function main() {
     // splitCount, etc.).
     console.log('Parsing + cleaning...');
     const source = parseArenaExport(raw);
-    const deck = await cleanWithLLM(source, null, () => {});
+    const deck = await cleanWithLLM(source, null, () => {}, { skipClean: SKIP_CLEAN });
 
     // Stamp the project id. cleanWithLLM doesn't know about the
     // wrapping record shape — that's the editor's job — so we set

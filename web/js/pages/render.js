@@ -545,8 +545,6 @@ nui.registerPage('render', {
                     html += `<div class="slide-body words-container">${buildWordSpans(slide.narration, slide.tts)}</div>`;
                 }
             } else {
-                // Default: conversation / flow layout. Words container
-                // wraps the on-screen text.
                 html += `<div class="slide-body words-container">${buildWordSpans(slide.text || slide.narration || '', slide.tts)}</div>`;
             }
 
@@ -569,30 +567,25 @@ nui.registerPage('render', {
         }
 
         function buildWordSpans(text, tts) {
-            const timedSegments = getTimedSegments(tts);
-            if (timedSegments.length > 0) {
-                return timedSegments.map(segment => {
-                    const words = segment.words.map(w => {
-                        return `<span class="word future" data-start="${w.startMs}" data-end="${w.endMs}">${escapeHtml(w.word)}</span> `;
-                    }).join('');
-                    return `<span class="segment future" data-start="${segment.startMs}" data-end="${segment.endMs}">${words}</span> `;
-                }).join('');
+            const timedWords = getTimedWords(tts);
+            if (timedWords.length > 0) {
+                return timedWords.map(w =>
+                    `<span class="word future" data-start="${w.startMs}" data-end="${w.endMs}">${escapeHtml(w.word)}</span> `
+                ).join('');
             }
-
             if (!text) return '';
-            const textWords = stripEmphasisForSpeech(text).split(/\s+/).filter(w => w.length > 0);
-            return textWords.map((w, i) => {
-                return `<span class="word future">${escapeHtml(w)}</span> `;
-            }).join('');
+            return `<span class="word future">${escapeHtml(text)}</span>`;
         }
 
-        function getTimedSegments(tts) {
+        function getTimedWords(tts) {
             if (!tts) return [];
-            if (tts.segments && tts.segments.length > 0) {
-                return tts.segments.filter(segment => segment.words && segment.words.length > 0);
-            }
-            if (tts.words && tts.words.length > 0) {
-                return [{ startMs: tts.words[0].startMs, endMs: tts.words[tts.words.length - 1].endMs, words: tts.words }];
+            if (tts.words && tts.words.length > 0) return tts.words;
+            if (tts.segments) {
+                const flat = [];
+                for (const seg of tts.segments) {
+                    if (seg.words) flat.push(...seg.words);
+                }
+                return flat;
             }
             return [];
         }
