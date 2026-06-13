@@ -519,6 +519,12 @@ nui-dialog[mode="page"] .options-source {
     opacity: 0.4;
 }
 
+/* Topic slide: future words stay fully readable because the words
+ * container is the only text on the slide. */
+.slide--topic .words-container .word.future {
+    opacity: 1;
+}
+
 .words-container .segment {
     display: inline;
     opacity: 1;

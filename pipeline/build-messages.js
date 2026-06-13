@@ -166,17 +166,22 @@ async function buildProject(sourceData, outputDir = null, progress = () => {}, o
     // paragraphs[] + speaker + type.
     progress('inject', `Injecting opening + closing slides`, 85);
     function slideToMessage(slide) {
+        const isTopic = slide.type === 'topic';
+        const rawText = slide.text || '';
+        const rawNarration = slide.narration || slide.text || '';
+        const text = isTopic ? rawText.replace(/^\s*Topic:\s*/i, '').trim() : rawText;
+        const narration = isTopic ? rawNarration.replace(/^\s*Topic:\s*/i, '').trim() : rawNarration;
         return {
             speaker: slide.speaker || 'narrator',
             label: slide.label || 'Narrator',
             role: 'narrator',
             type: slide.type,
-            text: slide.text || '',
-            narration: slide.narration || slide.text || '',
+            text,
+            narration,
             createdAt: null,
             originalSpeaker: 'narrator',
             meta: slide.meta || null,
-            paragraphs: splitIntoParagraphs(slide.narration || slide.text || '').map(p => ({ text: p }))
+            paragraphs: splitIntoParagraphs(narration).map(p => ({ text: p }))
         };
     }
 

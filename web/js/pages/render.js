@@ -146,8 +146,12 @@ nui.registerPage('render', {
                             alignComplete: p.alignComplete,
                             alignVersion: p.alignVersion
                         }));
-                        const text = msg.text || (type === 'setup' ? 'Setup' : type === 'details' ? 'Details' : type === 'end' ? 'End of conversation.' : '');
-                        const narration = msg.narration || paragraphs.map(p => p.text).join('\n\n') || text;
+                        let text = msg.text || (type === 'setup' ? 'Setup' : type === 'details' ? 'Details' : type === 'end' ? 'End of conversation.' : '');
+                        let narration = msg.narration || paragraphs.map(p => p.text).join('\n\n') || text;
+                        if (type === 'topic') {
+                            text = text.replace(/^\s*Topic:\s*/i, '').trim();
+                            narration = narration.replace(/^\s*Topic:\s*/i, '').trim();
+                        }
                         const tts = paragraphs.length > 0 ? {
                             audioUrl: paragraphs[0]?.audioUrl,
                             renderHash: paragraphs.map(p => p.renderHash).join('|'),
@@ -202,10 +206,12 @@ nui.registerPage('render', {
                     _virtual: true
                 });
 
+                const topicText = (source.seedPromptRaw || '').replace(/^\s*Topic:\s*/i, '').trim()
+                    || source.seedPrompt || source.topic || '';
                 slides.push({
                     type: 'topic',
-                    text: source.seedPromptRaw || source.seedPrompt || source.topic || '',
-                    narration: source.seedPromptRaw || source.seedPrompt || source.topic || '',
+                    text: topicText,
+                    narration: topicText,
                     speaker: 'narrator',
                     _virtual: true
                 });
@@ -440,9 +446,9 @@ nui.registerPage('render', {
                 accentBackground: false
             },
             topic: {
-                showEyebrow: false,
+                showEyebrow: true,
                 showSpeaker: false,
-                showHeader: false,
+                showHeader: true,
                 layout: 'centered',
                 textSize: 'xl',
                 textAlign: 'center',
@@ -1006,11 +1012,13 @@ nui.registerPage('render', {
                     html += `<div class="slide-narration words-container">${buildWordSpans(slide.narration, slide.tts, slide._paragraphs)}</div>`;
                 }
             } else if (style.layout === 'centered') {
-                // Topic slide: large centered text, no header. Words
-                // container overlays the same text for highlighting.
-                html += `<div class="slide-body slide-body--text">${escapeHtml(slide.text || '')}</div>`;
-                if (slide.narration) {
-                    html += `<div class="slide-body words-container">${buildWordSpans(slide.narration, slide.tts, slide._paragraphs)}</div>`;
+                // Topic slide: large centered text with word highlighting.
+                // If aligned words exist, the words container is the
+                // primary text so the topic is not duplicated.
+                if (slide._paragraphs?.some(p => p.words?.length > 0)) {
+                    html += `<div class="slide-body words-container">${buildWordSpans(slide.narration || slide.text || '', slide.tts, slide._paragraphs)}</div>`;
+                } else {
+                    html += `<div class="slide-body slide-body--text">${escapeHtml(slide.text || '')}</div>`;
                 }
             } else if (style.layout === 'minimal') {
                 // End slide: small centered. Use word spans if aligned.
