@@ -1,7 +1,7 @@
 <div class="page-editor">
-    <!-- Two-column layout: slides (left, ~70%) and chat (right, ~30%).
-         Voice mapping and conversation source move into an options
-         dialog, opened via the gear button in the toolbar. -->
+    <!-- Two-column layout: slides (left, ~70%) and voice panel (right, ~30%).
+         The voice panel is always visible — voice mapping is per-project
+         and is one of the things the user tunes in the editor. -->
     <div class="editor-grid">
         <!-- Left: Slide Deck -->
         <section class="editor-slides">
@@ -13,13 +13,8 @@
                 </nui-button>
                 <h2 class="editor-title" id="editor-project-title">Untitled</h2>
                 <div class="editor-toolbar-actions">
-                    <nui-button variant="primary" data-action="generate-deck">
-                        <button type="button">Generate with AI</button>
-                    </nui-button>
-                    <nui-button variant="icon" data-action="open-options" title="Voice mapping & source">
-                        <button type="button" aria-label="Open options">
-                            <nui-icon name="settings"></nui-icon>
-                        </button>
+                    <nui-button variant="primary" data-action="generate-deck" title="Run AI text cleaning on each message (removes stage directions, client-side noise, etc.)">
+                        <button type="button">Clean text with AI</button>
                     </nui-button>
                     <nui-button data-action="goto-render">
                         <button type="button">Render &amp; Play →</button>
@@ -31,22 +26,15 @@
             </div>
         </section>
 
-        <!-- Right: LLM Chat — parked. The /api/chat endpoint is still alive
-             but the UI is hidden. Un-hide by removing display:none from .editor-chat. -->
-        <aside class="editor-chat" style="display:none">
-            <header class="editor-chat-header">
-                <h3>Slide AI</h3>
+        <!-- Right: Voice panel — always-visible controls for narrator /
+             participant voices and speeds. -->
+        <aside class="editor-side-panel" id="voice-panel">
+            <header class="editor-side-panel__header">
+                <h3>Voices</h3>
+                <p class="editor-side-panel__hint">Per-project voice mapping. Changes are saved automatically.</p>
             </header>
-            <div id="chat-history" class="editor-chat-history">
-                <!-- Chat messages injected here -->
-            </div>
-            <div class="editor-chat-input">
-                <nui-input>
-                    <input type="text" id="chat-input" placeholder="Ask the AI to edit slides…">
-                </nui-input>
-                <nui-button variant="primary" data-action="chat-send">
-                    <button type="button">Send</button>
-                </nui-button>
+            <div id="voice-panel-body" class="editor-side-panel__body">
+                <!-- Voice rows injected here -->
             </div>
         </aside>
     </div>

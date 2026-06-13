@@ -60,33 +60,19 @@ nui.registerPage('editor', {
         const firstLoadOk = await loadProject(projectId);
         if (!firstLoadOk) return; // load failed, bail
 
-        // ─── Source rendering (used by options dialog) ──────
-        function buildSourceHtml() {
-            const msgs = deck.source?.messages || [];
-            if (msgs.length === 0) {
-                return '<p style="color: var(--text-color-dim);">No source messages.</p>';
-            }
-            return msgs.map((m, i) => {
-                const isModerator = (m.speaker || '').toLowerCase() === 'moderator';
-                const speakerLabel = escapeHtml(m.speaker || 'Unknown');
-                return `
-                    <div class="options-source-msg ${isModerator ? 'options-source-msg-moderator' : ''}">
-                        <div class="options-source-speaker">
-                            <strong>${speakerLabel}</strong>
-                            ${isModerator ? '<nui-badge variant="primary">setup</nui-badge>' : ''}
-                            <span class="options-source-turn">· Turn ${i + 1}</span>
-                        </div>
-                        <div class="options-source-content">${escapeHtml(m.content || m.text || '')}</div>
-                    </div>
-                `;
-            }).join('');
-        }
+        // ─── Voice panel (always visible in the editor's right column) ─
+        // Renders the narrator / participantA / participantB rows with a
+        // voice select and speed slider. Changes are saved to the deck
+        // immediately. The "Conversation Source" tab from the old
+        // options dialog was retired — the moderator message is the seed
+        // prompt, not data the editor needs to see.
+        const voicePanelBody = element.querySelector('#voice-panel-body');
+        const voicePanel = element.querySelector('#voice-panel');
 
-        // ─── Voice mapping rendering (used by options dialog) ─
-        function buildVoiceMappingHtml() {
-            // Read the latest voices list each time the dialog is built.
-            // The /api/voices fetch in app.js completes asynchronously
-            // and may not be done when the editor first initializes.
+        function buildVoicePanelHtml() {
+            // Read the latest voices list each time the panel is built.
+            // The fetch result is cached in localStorage (see app.js) so
+            // most page loads see a populated list synchronously.
             const voiceOptions = (window.SLIDESHOW_APP.voices || [])
                 .map(v => ({ value: v.name || v, label: v.name || v }));
 
@@ -120,11 +106,17 @@ nui.registerPage('editor', {
             }).join('');
         }
 
-        function bindVoiceMappingListeners() {
+        function renderVoicePanel() {
+            if (!voicePanelBody) return;
+            voicePanelBody.innerHTML = buildVoicePanelHtml();
+        }
+
+        function bindVoicePanelListeners() {
+            if (!voicePanel) return;
             ['narrator', 'participantA', 'participantB'].forEach(key => {
-                const select = document.querySelector(`#voice-${key}`);
-                const slider = document.querySelector(`#speed-${key}`);
-                const label = document.querySelector(`#speed-label-${key}`);
+                const select = voicePanel.querySelector(`#voice-${key}`);
+                const slider = voicePanel.querySelector(`#speed-${key}`);
+                const label = voicePanel.querySelector(`#speed-label-${key}`);
 
                 if (select) {
                     select.addEventListener('nui-change', (e) => {
@@ -149,37 +141,18 @@ nui.registerPage('editor', {
             });
         }
 
-        // ─── Open options dialog ────────────────────────────
-        function openOptionsDialog() {
-            const tabsHtml = `
-                <nui-tabs no-animation>
-                    <nav>
-                        <button data-tab="voice" aria-controls="opt-voice">Voice Mapping</button>
-                        <button data-tab="source" aria-controls="opt-source">Conversation Source</button>
-                    </nav>
-                    <section id="opt-voice" class="options-pane">
-                        <div class="options-voice-list">${buildVoiceMappingHtml()}</div>
-                    </section>
-                    <section id="opt-source" class="options-pane" hidden>
-                        <div class="options-source">${buildSourceHtml()}</div>
-                    </section>
-                </nui-tabs>
-            `;
-            const { dialog, result } = nui.components.dialog.page(
-                'Options',
-                tabsHtml,
-                {
-                    placement: 'top',
-                    buttons: [
-                        { label: 'Close', value: 'close', type: 'primary' }
-                    ]
-                }
-            );
-            // Wire up voice listeners after the dialog is in the DOM
-            // (page() inserts into body, so querySelector works immediately)
-            requestAnimationFrame(() => bindVoiceMappingListeners());
-            return result;
+        // Initial render of the voice panel + listeners. Await the
+        // voices fetch so the <select> options are present on the
+        // first paint (no flash of an empty dropdown). On fetch
+        // failure, render with whatever's available.
+        try {
+            await window.SLIDESHOW_APP.voicesReady;
+        } catch {
+            // voicesReady never rejects (it swallows errors), but be
+            // defensive in case that changes.
         }
+        renderVoicePanel();
+        requestAnimationFrame(() => bindVoicePanelListeners());
 
         // ─── Slide rendering ───────────────────────────────
         const slideDeck = element.querySelector('#slide-deck');
@@ -198,7 +171,7 @@ nui.registerPage('editor', {
                     <nui-card>
                         <div class="empty-state">
                             <p>No slides yet.</p>
-                            <p>Click "Generate with AI" to create slides from the conversation.</p>
+                            <p>Click "Clean text with AI" to create slides from the conversation.</p>
                         </div>
                     </nui-card>
                 `;
@@ -266,7 +239,7 @@ nui.registerPage('editor', {
                     <nui-card>
                         <div class="empty-state">
                             <p>No messages yet.</p>
-                            <p>Click "Generate with AI" to process the conversation.</p>
+                            <p>Click "Clean text with AI" to process the conversation.</p>
                         </div>
                     </nui-card>
                 `;
@@ -712,9 +685,37 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
             }
 
             if (action === 'chat-send') sendChat();
-            if (action === 'goto-render') window.location.hash = `#page=render&id=${projectId}`;
+            if (action === 'goto-render') {
+                // Guard: warn if any voice role is unset. An empty
+                // `voice` string means the user picked the placeholder
+                // "Select voice..." option. Falling through to render
+                // & play with an empty voice would silently default to
+                // whatever the TTS service picks, which is almost
+                // never what the user wants.
+                const vm = deck.voiceMapping || {};
+                const missing = [];
+                for (const [role, cfg] of Object.entries(vm)) {
+                    if (!cfg || !cfg.voice) missing.push(role);
+                }
+                if (missing.length > 0) {
+                    const labels = {
+                        narrator: 'Narrator',
+                        participantA: deck.source?.participants?.[0] || 'Participant A',
+                        participantB: deck.source?.participants?.[1] || 'Participant B'
+                    };
+                    const names = missing.map(r => labels[r] || r).join(', ');
+                    nui.components.dialog.confirm(
+                        'Unset voices',
+                        `The following voice${missing.length === 1 ? ' is' : 's are'} not set: ${names}. Render & Play will fall back to defaults, which may not match the rest of the deck. Continue anyway?`,
+                        { placement: 'top' }
+                    ).then(ok => {
+                        if (ok) window.location.hash = `#page=render&id=${projectId}`;
+                    });
+                    return;
+                }
+                window.location.hash = `#page=render&id=${projectId}`;
+            }
             if (action === 'back-to-projects') window.location.hash = '#page=projects';
-            if (action === 'open-options') openOptionsDialog();
 
             if (action === 'play-slide') {
                 const idx = parseInt(param);

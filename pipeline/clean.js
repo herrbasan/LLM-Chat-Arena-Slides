@@ -8,13 +8,11 @@
 //   - Spoken action beats: "*stays*", "*nods*" → preserved verbatim
 //   - All actual conversation content → passed through verbatim
 //
-// Caching: each message's cleaned output is cached on disk keyed by a
-// content hash of (raw text + speaker). Re-runs with unchanged messages
-// skip the gateway call entirely.
+// Caching: none. Every "Clean text with AI" click actually hits the
+// LLM. See the Caching section below.
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 
 // ─── Config ───────────────────────────────────────────────────
 
@@ -69,35 +67,10 @@ RULES (in order of priority):
 Output ONLY the cleaned text. No preamble, no explanation, no markdown fences.`;
 
 // ─── Caching ──────────────────────────────────────────────────
-
-const CACHE_DIR = path.join(__dirname, 'output', '.clean_cache');
-
-function cacheKey(text, speaker) {
-    const hash = crypto.createHash('sha256');
-    hash.update('v' + PROMPT_VERSION);
-    hash.update('|');
-    hash.update(String(text || ''));
-    hash.update('|');
-    hash.update(String(speaker || ''));
-    return hash.digest('hex').substring(0, 16);
-}
-
-function cachePath(key) {
-    return path.join(CACHE_DIR, `${key}.txt`);
-}
-
-function readCache(key) {
-    const p = cachePath(key);
-    if (fs.existsSync(p)) {
-        return fs.readFileSync(p, 'utf-8');
-    }
-    return null;
-}
-
-function writeCache(key, cleaned) {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(cachePath(key), cleaned, 'utf-8');
-}
+// Caching was removed: every "Clean text with AI" click now actually
+// hits the LLM. The user wants the cleaning to be a real action each
+// time, not a no-op that returns the previous result. (See commit
+// 2026-06-13 — user feedback: cleanup "instantly finishes".)
 
 // ─── Gateway call ─────────────────────────────────────────────
 
@@ -143,16 +116,7 @@ async function gatewayChat(userMessage) {
  */
 async function cleanMessage(text, speaker = 'unknown') {
     if (!text) return '';
-
-    const key = cacheKey(text, speaker);
-    const cached = readCache(key);
-    if (cached !== null) {
-        return cached;
-    }
-
-    const cleaned = await gatewayChat(text);
-    writeCache(key, cleaned);
-    return cleaned;
+    return await gatewayChat(text);
 }
 
 /**
@@ -164,31 +128,18 @@ async function cleanMessage(text, speaker = 'unknown') {
  */
 async function cleanAllMessages(messages, onProgress) {
     let cleaned = 0;
-    let cached = 0;
 
     for (let i = 0; i < messages.length; i++) {
         const m = messages[i];
-        const key = cacheKey(m.content, m.speaker);
-        const existing = readCache(key);
-
-        if (existing !== null) {
-            m.content = existing;
-            cached++;
-        } else {
-            m.content = await gatewayChat(m.content);
-            writeCache(key, m.content);
-            cleaned++;
-        }
+        m.content = await gatewayChat(m.content);
+        cleaned++;
 
         if (onProgress) {
-            onProgress(i + 1, messages.length, m.speaker, cleaned, cached);
+            onProgress(i + 1, messages.length, m.speaker, cleaned);
         }
     }
 
-    if (cleaned > 0 || cached > 0) {
-        console.log(`[Clean] ${cleaned} messages cleaned, ${cached} from cache, ${messages.length} total`);
-    }
-
+    console.log(`[Clean] ${cleaned} messages cleaned (no cache — every run hits the LLM)`);
     return messages;
 }
 

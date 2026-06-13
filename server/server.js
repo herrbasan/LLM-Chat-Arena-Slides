@@ -530,6 +530,29 @@ app.post('/api/v3/generate-deck', async (req, res) => {
     }
 });
 
+// Raw import: builds a v3 project skeleton from the Arena export
+// WITHOUT running the LLM cleaning pass. Used by the import flow so
+// the user is never surprised by a silent LLM call. The editor's
+// "Generate with AI" button is the explicit trigger for the clean
+// pass (which calls /api/v3/generate-deck above). The resulting
+// project still has the deterministic opening slides (setup +
+// details + topic, using source.seedPrompt) and paragraph-split
+// conversation messages, but no LLM-derived text cleaning.
+app.post('/api/v3/import-raw', async (req, res) => {
+    const arenaData = req.body;
+    if (!arenaData || !Array.isArray(arenaData.messages)) {
+        return res.status(400).json({ error: 'Invalid Arena export: missing messages array' });
+    }
+    try {
+        console.log(`[Server] v3 Import (raw): ${arenaData.messages.length} messages`);
+        const project = await buildProject(arenaData, null, null, { skipClean: true });
+        res.json(project);
+    } catch (err) {
+        console.error('[Server] v3 Import (raw) failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ─── Cached Render ──────────────────────────────────────────
 
 // ─── LLM Chat Proxy ────────────────────────────────────────

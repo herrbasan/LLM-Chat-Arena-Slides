@@ -239,8 +239,9 @@ nui-dialog[mode="page"] .options-source {
     padding-right: var(--nui-space-quarter);
 }
 
-/* Chat panel: header, scrollable history, sticky input row. */
-.editor-chat {
+/* Side panel: header, scrollable body, no input row. Used for the
+ * always-visible voice mapping in the editor. */
+.editor-side-panel {
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -249,36 +250,29 @@ nui-dialog[mode="page"] .options-source {
     overflow: hidden;
 }
 
-.editor-chat-header {
+.editor-side-panel__header {
     padding: var(--nui-space) var(--nui-space) 0 var(--nui-space);
     flex-shrink: 0;
 }
 
-.editor-chat-header h3 {
+.editor-side-panel__header h3 {
     margin: 0;
 }
 
-.editor-chat-history {
+.editor-side-panel__hint {
+    margin: 4px 0 0 0;
+    color: var(--text-color-dim);
+    font-size: var(--font-size-xsmall);
+}
+
+.editor-side-panel__body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     padding: var(--nui-space);
     display: flex;
     flex-direction: column;
-    gap: var(--nui-space-half);
-}
-
-.editor-chat-input {
-    display: flex;
-    gap: var(--nui-space-half);
-    padding: var(--nui-space);
-    border-top: 1px solid var(--border-shade1);
-    background: var(--color-base);
-    flex-shrink: 0;
-}
-
-.editor-chat-input nui-input {
-    flex: 1;
+    gap: var(--nui-space);
 }
 
 /* Slide cards: header with badges, play/delete actions, textarea */
@@ -321,25 +315,8 @@ nui-dialog[mode="page"] .options-source {
     color: var(--text-color-dim);
 }
 
-/* When the chat history has no messages, don't let it take all the
- * available vertical space — it just looks broken with a huge
- * empty gap. Cap it at a more reasonable height. */
-.editor-chat-history:empty {
-    flex: 0 0 auto;
-    min-height: 4rem;
-}
-
-.editor-chat-history:empty::before {
-    content: 'AI tool calls and responses will appear here.';
-    display: block;
-    color: var(--text-color-dim);
-    font-size: var(--font-size-small);
-    text-align: center;
-    padding: var(--nui-space);
-    font-style: italic;
-}
-
-/* Chat messages */
+/* Chat messages — kept for backward compat (the chat UI is parked,
+ * but the classes are still defined in case it's revived). */
 .chat-msg {
     padding: var(--nui-space-half);
     border-radius: var(--border-radius2);
@@ -364,19 +341,7 @@ nui-dialog[mode="page"] .options-source {
     color: var(--text-color-dim);
 }
 
-/* Options dialog panes */
-.options-pane {
-    min-height: 12rem;
-    max-height: 60vh;
-    overflow-y: auto;
-}
-
-.options-voice-list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--nui-space);
-}
-
+/* Voice rows in the editor's side panel. */
 .options-voice-row {
     display: flex;
     flex-direction: column;
@@ -398,41 +363,6 @@ nui-dialog[mode="page"] .options-source {
     text-align: right;
     font-size: var(--font-size-small);
     color: var(--text-color-dim);
-}
-
-.options-source-msg {
-    margin-bottom: var(--nui-space);
-    padding: var(--nui-space-half);
-    background: var(--color-shade1);
-    border-radius: var(--border-radius1);
-}
-
-/* Moderator (setup) message: subtle highlight so it's easy to
- * spot — the narrator will read this for the title slide. */
-.options-source-msg-moderator {
-    border-left: 3px solid var(--color-highlight);
-    background: var(--color-shade2);
-}
-
-.options-source-speaker {
-    font-size: var(--font-size-xsmall);
-    margin-bottom: 2px;
-    display: flex;
-    align-items: center;
-    gap: var(--nui-space-half);
-}
-
-.options-source-speaker strong {
-    color: var(--color-highlight);
-}
-
-.options-source-turn {
-    color: var(--text-color-dim);
-}
-
-.options-source-content {
-    white-space: pre-wrap;
-    word-break: break-word;
 }
 .editor-summary-row {
     display: flex;
@@ -618,6 +548,29 @@ nui-dialog[mode="page"] .options-source {
     color: var(--text-color-dim);
 }
 
+/* Split-chunk bubbles. One per virtual slide in a multi-chunk message.
+ * Outlined by default; the current chunk is filled with the highlight
+ * color. Sits below the speaker/timestamp row. */
+.slide-split-bubbles {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 4px;
+}
+.slide-split-bubbles__bubble {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 1px solid var(--border-shade3);
+    background: transparent;
+    box-sizing: border-box;
+    transition: background 0.15s, border-color 0.15s;
+}
+.slide-split-bubbles__bubble.is-active {
+    background: var(--color-highlight);
+    border-color: var(--color-highlight);
+}
+
 /* Body. Sized by --text-size--{size}, aligned by --align-{left|center}. */
 .slide-body {
     line-height: 1.5;
@@ -769,7 +722,7 @@ nui-dialog[mode="page"] .options-source {
 
 .render-layout {
     display: grid;
-    grid-template-columns: 320px 1fr;
+    grid-template-columns: 384px 1fr;
     gap: var(--nui-space);
     height: 100%;
 }
@@ -990,6 +943,91 @@ nui-icon.icon-flip-horizontal {
     font-size: var(--font-size-xsmall);
     color: var(--text-color-dim);
     margin-left: 4px;
+}
+
+/* ─── Sidebar grouping (v3) ─── */
+/*
+ * Each conversation message becomes a group: a header row with the
+ * message number, model label, status dot, slide count, and a render
+ * action; followed by an always-expanded list of indented sub-rows,
+ * one per virtual slide. Setup/Details/Topic/End render as their own
+ * top-level rows (.render-slide-row--top), no nesting.
+ */
+
+.render-slide-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: var(--nui-space-half);
+}
+
+.render-slide-group__header {
+    display: flex;
+    align-items: center;
+    gap: var(--nui-space-half);
+    padding: 4px var(--nui-space-half) 4px calc(var(--nui-space-half) + 4px);
+    border-radius: var(--border-radius1);
+    border-left: 3px solid transparent;
+    background: transparent;
+    cursor: pointer;
+    min-width: 0;
+}
+.render-slide-group__header.is-dimmed {
+    opacity: 0.5;
+}
+.render-slide-group__num {
+    font-size: var(--font-size-small);
+    font-weight: 600;
+    color: var(--text-color-dim);
+    min-width: 1.5rem;
+    flex-shrink: 0;
+}
+.render-slide-group__label {
+    font-size: var(--font-size-small);
+    font-weight: 500;
+    color: var(--text-color);
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.render-slide-group__count {
+    font-size: var(--font-size-xsmall);
+    color: var(--text-color-dim);
+    flex-shrink: 0;
+}
+
+.render-slide-group__slides {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    /* Indent the sub-slides under the numbered group header. */
+    padding-left: 1.25rem;
+    border-left: 1px solid var(--border-shade1);
+    margin-left: calc(var(--nui-space-half) + 4px + 0.75rem);
+}
+
+/* Top-level non-conversation rows (Setup/Details/Topic/End) get a
+ * distinct left padding so they read as siblings, not children, of
+ * a message group. */
+.render-slide-row--top {
+    margin-bottom: 2px;
+}
+.render-slide-row--top .render-slide-row__label {
+    color: var(--text-color);
+    font-weight: 500;
+    text-transform: capitalize;
+}
+
+/* Sub-slide row: indented, dimmer by default, brighter when selected. */
+.render-slide-row--sub .render-slide-row__label {
+    font-weight: 400;
+    color: var(--text-color-dim);
+}
+.render-slide-row--sub.is-selected .render-slide-row__label {
+    font-weight: 500;
+    color: var(--text-color);
 }
 
 .render-progress-wrap {

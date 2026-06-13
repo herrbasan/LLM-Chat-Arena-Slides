@@ -6,6 +6,10 @@ window.SLIDESHOW_APP = {
     currentProject: null,
     deck: null,
     voices: [],
+    // voicesReady: a Promise that resolves to the voices array. Pages
+    // (e.g. the editor's voice panel) can `await SLIDESHOW_APP.voicesReady`
+    // to render with a populated <select> on the first paint.
+    voicesReady: null,
     projects: []
 };
 
@@ -127,13 +131,30 @@ nui.setupRouter({
     defaultPage: 'projects'
 });
 
-// Load voices in background
-fetch('/api/voices')
-    .then(r => r.ok ? r.json() : { voices: [] })
-    .then(data => {
-        window.SLIDESHOW_APP.voices = data.voices || [];
-    })
-    .catch(() => { window.SLIDESHOW_APP.voices = []; });
+// ─── Voices fetch (in-memory) ──────────────────────────────────
+//
+// On startup, fetch the list of available voices from nSpeech once.
+// Store them on SLIDESHOW_APP.voices and resolve SLIDESHOW_APP.voicesReady
+// when the fetch completes. Pages (e.g. the editor's voice panel) can
+// await voicesReady so the <select> options are present on the first
+// paint. The user's voice *selection* is persisted on the project
+// record (deck.voiceMapping) — see the editor's voice panel for the
+// per-project save path. We deliberately don't cache the voice list
+// across sessions: it changes whenever nSpeech adds/retires voices.
+
+window.SLIDESHOW_APP.voicesReady = (async () => {
+    try {
+        const res = await fetch('/api/voices');
+        const data = res.ok ? await res.json() : { voices: [] };
+        const voices = Array.isArray(data.voices) ? data.voices : [];
+        window.SLIDESHOW_APP.voices = voices;
+        return voices;
+    } catch (err) {
+        console.warn('[Voices] fetch failed:', err.message);
+        window.SLIDESHOW_APP.voices = [];
+        return [];
+    }
+})();
 
 // Initial stepper render once NUI is ready
 nui.ready().then(() => {

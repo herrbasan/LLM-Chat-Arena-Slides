@@ -620,10 +620,9 @@ nui.registerPage('render', {
         }
 
         // Build the header label for a slide. For setup/details/title/end,
-        // return the type label verbatim. For conversation/narration slides
-        // (which may be split from a single source message), return
-        // "<originalIdx+1>.<splitIdx> <speaker>" so the list and player
-        // header share a stable numeric identity.
+        // return the type label verbatim. For conversation/narration slides,
+        // return just the speaker/label. The split-chunk index is shown
+        // separately as a row of bubbles below the header line.
         function buildHeaderLabel(slide, idx) {
             if (slide.type !== 'conversation' && slide.type !== 'narration') {
                 return slide.type.charAt(0).toUpperCase() + slide.type.slice(1);
@@ -631,10 +630,27 @@ nui.registerPage('render', {
             if (slide.originalIdx == null) {
                 return slide.label || slide.speaker || `Slide ${idx + 1}`;
             }
-            const major = slide.originalIdx + 1;
+            return slide.label || slide.speaker || '';
+        }
+
+        // Build the row of split-chunk bubbles for a slide. For
+        // conversation/narration slides that were split from a single
+        // source message, render one bubble per chunk. The bubble
+        // corresponding to the current chunk is filled; the others are
+        // outlined. Returns '' for non-conversation slides or single-chunk
+        // messages (no visual signal needed).
+        function buildSplitBubbles(slide, idx) {
+            if (slide.type !== 'conversation' && slide.type !== 'narration') return '';
+            if (slide.originalIdx == null) return '';
+            const splitCount = slide.splitCount || 1;
+            if (splitCount <= 1) return '';
             const splitIdx = getSplitIndices().get(idx) || 0;
-            const who = slide.label || slide.speaker || '';
-            return `${major}.${splitIdx} ${who}`.trim();
+            const bubbles = [];
+            for (let i = 0; i < splitCount; i++) {
+                const isActive = i === splitIdx;
+                bubbles.push(`<span class="slide-split-bubbles__bubble${isActive ? ' is-active' : ''}" aria-current="${isActive ? 'true' : 'false'}"></span>`);
+            }
+            return `<div class="slide-split-bubbles" aria-label="Chunk ${splitIdx + 1} of ${splitCount}">${bubbles.join('')}</div>`;
         }
 
         function computeRenderHash(text, voice, speed) {
@@ -654,6 +670,7 @@ nui.registerPage('render', {
         let renderingSlides = new Set();
 
         function computeMessageStaleness(msg) {
+            if (!msg) return 'unrendered'; // defensive: null holes in messages[]
             const voiceConfig = deck.voiceMapping?.[msg.speaker || 'narrator'] || deck.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
             const paragraphs = msg.paragraphs || [];
             if (paragraphs.length === 0) return 'unrendered';
@@ -684,6 +701,12 @@ nui.registerPage('render', {
         }
 
         function renderMessageList() {
+            // v2 path: flat per-slide list (no message grouping).
+            if (!isV3) {
+                renderSlideList();
+                return;
+            }
+
             const messages = deck.messages || [];
             if (messages.length === 0) {
                 messageList.innerHTML = '<p class="render-status-hint">No messages to render.</p>';
@@ -691,6 +714,9 @@ nui.registerPage('render', {
                 return;
             }
 
+            // Status counts (kept at the message level — the dots in the
+            // status card summarize message freshness, not individual
+            // virtual slides).
             const counts = { fresh: 0, stale: 0, unrendered: 0, rendering: renderingMessages.size };
             messages.forEach(m => { counts[computeMessageStaleness(m)]++; });
 
@@ -715,29 +741,97 @@ nui.registerPage('render', {
                 </div>
             `;
 
-            messageList.innerHTML = messages.map((msg, idx) => {
-                const isRendering = renderingMessages.has(idx);
-                const status = isRendering ? 'rendering' : computeMessageStaleness(msg);
-                const isNonConversation = msg.type && msg.type !== 'conversation';
-                const label = isNonConversation
-                    ? (msg.type.charAt(0).toUpperCase() + msg.type.slice(1))
-                    : (msg.label || msg.originalSpeaker || msg.speaker || `Message ${idx + 1}`);
-                const paraCount = (msg.paragraphs || []).length;
-                return `
-                    <div data-msg-idx="${idx}" class="render-slide-row ${status !== 'fresh' && !isRendering ? 'is-dimmed' : ''}" title="${escapeHtml(label)} (${statusLabel[status]})">
-                        <span class="render-slide-row__dot ${status}" data-msg-idx="${idx}"></span>
-                        <span class="render-slide-row__label" data-msg-idx="${idx}">${escapeHtml(label)} <span class="render-message-meta">${paraCount}p</span></span>
-                        ${!isRendering ? `<span class="render-slide-row__action"><nui-button variant="icon" data-action="render-message:${idx}" title="Render this message"><button type="button" aria-label="Render message ${idx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button></span>` : ''}
-                    </div>
-                `;
-            }).join('');
+            // ─── Build msgIdx → virtual-slide-indices map ───
+            // Conversation slides (split chunks of a single source message)
+            // are grouped under their source message. Non-conversation
+            // slides (setup, details, topic, end) are top-level entries
+            // with no children.
+            const slidesByMsg = new Map();
+            const topLevelByType = []; // setup/details/topic/end as their own top-level entries
+            (deck.slides || []).forEach((slide, slideIdx) => {
+                if (slide.type !== 'conversation' && slide.type !== 'narration') {
+                    topLevelByType.push({ slideIdx, slide });
+                    return;
+                }
+                const msgIdx = slide._paragraphs?.[0]?.msgIdx;
+                if (msgIdx == null) {
+                    topLevelByType.push({ slideIdx, slide });
+                    return;
+                }
+                if (!slidesByMsg.has(msgIdx)) slidesByMsg.set(msgIdx, []);
+                slidesByMsg.get(msgIdx).push(slideIdx);
+            });
 
-            // Click to jump to first slide for this message
+            // Build the sidebar. Top-level entries first (setup, details,
+            // topic, end) in the order they appear in deck.slides, then
+            // conversation messages in order. Conversation messages are
+            // numbered starting at 1 for display.
+            const out = [];
+            topLevelByType.forEach(({ slideIdx, slide }) => {
+                const status = computeStaleness(slide);
+                const isSelected = slideIdx === currentSlideIdx;
+                const isDimmed = status !== 'fresh' && !renderingSlides.has(slideIdx);
+                const label = slide.type.charAt(0).toUpperCase() + slide.type.slice(1);
+                out.push(`
+                    <div data-slide-idx="${slideIdx}" class="render-slide-row render-slide-row--top ${isSelected ? 'is-selected' : ''} ${isDimmed ? 'is-dimmed' : ''}" title="${escapeHtml(label)} (${statusLabel[status]})">
+                        <span class="render-slide-row__dot ${status}" data-slide-idx="${slideIdx}"></span>
+                        <span class="render-slide-row__label" data-slide-idx="${slideIdx}">${escapeHtml(label)}</span>
+                        ${!renderingSlides.has(slideIdx) ? `<span class="render-slide-row__action"><nui-button variant="icon" data-action="render-slide:${slideIdx}" title="Render this slide"><button type="button" aria-label="Render slide ${slideIdx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button></span>` : ''}
+                    </div>
+                `);
+            });
+
+            let msgCounter = 0;
+            messages.forEach((msg, msgIdx) => {
+                if (msg.type && msg.type !== 'conversation') return; // already in top-level
+                msgCounter++;
+                const subSlides = slidesByMsg.get(msgIdx) || [];
+                const isRendering = renderingMessages.has(msgIdx);
+                const status = isRendering ? 'rendering' : computeMessageStaleness(msg);
+                const isDimmed = status !== 'fresh' && !isRendering;
+                const label = msg.label || msg.originalSpeaker || msg.speaker || `Message ${msgIdx + 1}`;
+                const subRows = subSlides.map((sIdx, j) => {
+                    const subSlide = deck.slides[sIdx];
+                    const subStatus = computeStaleness(subSlide);
+                    const subSelected = sIdx === currentSlideIdx;
+                    const subDimmed = subStatus !== 'fresh' && !renderingSlides.has(sIdx);
+                    return `
+                        <div data-slide-idx="${sIdx}" class="render-slide-row render-slide-row--sub ${subSelected ? 'is-selected' : ''} ${subDimmed ? 'is-dimmed' : ''}" title="Slide ${j + 1} of ${subSlides.length} (${statusLabel[subStatus]})">
+                            <span class="render-slide-row__dot ${subStatus}" data-slide-idx="${sIdx}"></span>
+                            <span class="render-slide-row__label" data-slide-idx="${sIdx}">Slide ${j + 1} of ${subSlides.length}</span>
+                            ${!renderingSlides.has(sIdx) ? `<span class="render-slide-row__action"><nui-button variant="icon" data-action="render-vslide:${sIdx}" title="Render this virtual slide"><button type="button" aria-label="Render slide ${sIdx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button></span>` : ''}
+                        </div>
+                    `;
+                }).join('');
+                out.push(`
+                    <div class="render-slide-group">
+                        <div data-msg-idx="${msgIdx}" class="render-slide-group__header ${isDimmed ? 'is-dimmed' : ''}" title="${escapeHtml(label)} (${statusLabel[status]})">
+                            <span class="render-slide-group__num">${msgCounter}.</span>
+                            <span class="render-slide-row__dot ${status}" data-msg-idx="${msgIdx}"></span>
+                            <span class="render-slide-group__label">${escapeHtml(label)}</span>
+                            <span class="render-slide-group__count">${subSlides.length} slide${subSlides.length === 1 ? '' : 's'}</span>
+                            ${!isRendering ? `<span class="render-slide-row__action"><nui-button variant="icon" data-action="render-message:${msgIdx}" title="Render this message"><button type="button" aria-label="Render message ${msgIdx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button></span>` : ''}
+                        </div>
+                        <div class="render-slide-group__slides">${subRows}</div>
+                    </div>
+                `);
+            });
+
+            messageList.innerHTML = out.join('');
+
+            // Click handlers: sub-rows jump to a specific virtual slide.
+            // Group headers jump to the first virtual slide in the group.
+            messageList.querySelectorAll('[data-slide-idx]').forEach(el => {
+                el.addEventListener('click', () => {
+                    const idx = parseInt(el.dataset.slideIdx);
+                    loadSlide(idx);
+                });
+            });
             messageList.querySelectorAll('[data-msg-idx]').forEach(el => {
                 el.addEventListener('click', () => {
                     const idx = parseInt(el.dataset.msgIdx);
-                    const slideIdx = deck.slides.findIndex(s => s._paragraphs?.some(p => p.msgIdx === idx));
-                    if (slideIdx >= 0) loadSlide(slideIdx);
+                    const first = (slidesByMsg.get(idx) || [])[0];
+                    if (first != null) loadSlide(first);
                 });
             });
         }
@@ -819,6 +913,89 @@ nui.registerPage('render', {
                 nui.components.banner.show({ content: `Message ${idx + 1} render failed: ${err.message}`, priority: 'alert', autoClose: 5000 });
             } finally {
                 renderingMessages.delete(idx);
+                renderMessageList();
+                loadSlide(currentSlideIdx);
+            }
+        }
+
+        // Render a single virtual slide (a group of paragraphs in a
+        // single source message). Loops over the slide's paragraphs and
+        // calls the per-paragraph endpoint. The server is idempotent on
+        // already-fresh paragraphs, so this is safe to re-run.
+        async function renderVirtualSlide(slideIdx) {
+            if (!isV3) {
+                return renderSingleSlide(slideIdx);
+            }
+            const slide = deck.slides?.[slideIdx];
+            if (!slide || !slide._paragraphs) return;
+            const paragraphs = slide._paragraphs.filter(p => p.text && p.text.trim() && p.text.trim() !== '...');
+            if (paragraphs.length === 0) return;
+
+            // Mark both the slide and the source message as rendering so
+            // both dots in the sidebar show the in-flight state.
+            renderingSlides.add(slideIdx);
+            const msgIdx = paragraphs[0].msgIdx;
+            if (msgIdx != null) renderingMessages.add(msgIdx);
+            renderMessageList();
+
+            let failed = 0;
+            try {
+                for (const para of paragraphs) {
+                    try {
+                        const res = await fetch(`/api/v3/render-paragraph/${projectId}/${para.msgIdx}/${para.paraIdx}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' }
+                        });
+                        if (!res.ok) throw new Error((await res.json()).error || 'Render failed');
+                        // The server returns the updated paragraph. Splice
+                        // it back into the message's paragraphs[].
+                        const updatedPara = await res.json();
+                        const targetMsg = deck.messages[para.msgIdx];
+                        if (targetMsg && targetMsg.paragraphs) {
+                            targetMsg.paragraphs[para.paraIdx] = updatedPara;
+                        }
+                    } catch {
+                        failed++;
+                    }
+                }
+                virtualSlides = buildVirtualSlides();
+                deck.slides = virtualSlides;
+                window.SLIDESHOW_APP.deck = deck;
+                invalidateSplitIndexCache();
+                if (failed === 0) {
+                    nui.components.banner.show({ content: `Slide rendered`, priority: 'success', autoClose: 2000 });
+                } else {
+                    nui.components.banner.show({ content: `Slide render: ${paragraphs.length - failed}/${paragraphs.length} ok`, priority: 'alert', autoClose: 5000 });
+                }
+            } finally {
+                renderingSlides.delete(slideIdx);
+                if (msgIdx != null) renderingMessages.delete(msgIdx);
+                renderMessageList();
+                loadSlide(currentSlideIdx);
+            }
+        }
+
+        // Render a single v2 slide (no paragraph grouping). Calls the
+        // /api/render-slide endpoint, which generates the TTS audio
+        // and re-aligns words. Mirrors the v2 branch of renderAllSlides.
+        async function renderSingleSlide(slideIdx) {
+            renderingSlides.add(slideIdx);
+            renderMessageList();
+            try {
+                const res = await fetch(`/api/render-slide/${projectId}/${slideIdx}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                if (!res.ok) throw new Error((await res.json()).error || 'Render failed');
+                const { slide } = await res.json();
+                deck.slides[slideIdx] = slide;
+                window.SLIDESHOW_APP.deck = deck;
+                invalidateSplitIndexCache();
+                nui.components.banner.show({ content: `Slide rendered`, priority: 'success', autoClose: 2000 });
+            } catch (err) {
+                nui.components.banner.show({ content: `Slide render failed: ${err.message}`, priority: 'alert', autoClose: 5000 });
+            } finally {
+                renderingSlides.delete(slideIdx);
                 renderMessageList();
                 loadSlide(currentSlideIdx);
             }
@@ -1031,6 +1208,9 @@ nui.registerPage('render', {
                     }
                     html += `</div>`;
                 }
+                // Split-chunk bubbles: one per chunk, active bubble filled.
+                const bubbles = buildSplitBubbles(slide, idx);
+                if (bubbles) html += bubbles;
                 html += `</div>`;
             }
 
@@ -1089,6 +1269,8 @@ nui.registerPage('render', {
             updateControls();
             updateProgress(0);
             updateTimeDisplay(0, tts?.durationMs || 0);
+            // Reflect the new current slide in the sidebar selection.
+            renderMessageList();
         }
 
         function buildWordSpans(text, tts, paragraphs) {
@@ -1341,6 +1523,11 @@ nui.registerPage('render', {
             if (action === 'render-slide') {
                 const idx = parseInt(param, 10);
                 await renderSingleSlide(idx);
+            }
+
+            if (action === 'render-vslide') {
+                const idx = parseInt(param, 10);
+                await renderVirtualSlide(idx);
             }
 
             if (action === 'player-play') {

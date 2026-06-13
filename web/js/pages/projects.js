@@ -169,11 +169,14 @@ nui.registerPage('projects', {
                     throw new Error('Invalid Arena Export format');
                 }
 
-                // Use v3 pipeline: send raw Arena JSON to generate-deck,
-                // then save the result as a project.
+                // Raw import: build a v3 project skeleton without running
+                // the LLM cleaning pass. The user goes to the editor and
+                // explicitly clicks "Clean text with AI" to run the cleaning
+                // pass (which calls /api/v3/generate-deck). This keeps the
+                // import flow fast and transparent: no surprise LLM calls.
                 nui.components.banner.show({ content: 'Importing conversation…', priority: 'info' });
 
-                const res = await fetch('/api/v3/generate-deck', {
+                const res = await fetch('/api/v3/import-raw', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -197,10 +200,11 @@ nui.registerPage('projects', {
                 });
                 const saveResult = await saveRes.json();
 
+                const paraCount = project.messages?.reduce((s, m) => s + (m.paragraphs?.length || 0), 0) || 0;
                 nui.components.banner.show({
-                    content: `Imported: ${project.messages?.length || 0} messages, ${project.messages?.reduce((s, m) => s + (m.paragraphs?.length || 0), 0) || 0} paragraphs`,
+                    content: `Imported (raw): ${project.messages?.length || 0} messages, ${paraCount} paragraphs. Open the editor and click "Clean text with AI" to clean up text.`,
                     priority: 'success',
-                    autoClose: 3000
+                    autoClose: 5000
                 });
 
                 window.SLIDESHOW_APP.currentProject = saveResult.id;
