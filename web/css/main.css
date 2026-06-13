@@ -823,7 +823,8 @@ nui-dialog[mode="page"] .options-source {
     font-size: var(--font-size-medium);
 }
 
-#render-slide-list {
+#render-slide-list,
+#render-message-list {
     flex: 1;
     overflow-y: auto;
     display: flex;
