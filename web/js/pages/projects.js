@@ -22,11 +22,11 @@ nui.registerPage('projects', {
 
         function renderProjectRow(item) {
             const el = document.createElement('div');
-            el.style.cssText = 'padding: var(--nui-space); border-bottom: 1px solid var(--border-shade1); display: flex; justify-content: space-between; align-items: center; gap: var(--nui-space);';
+            el.className = 'project-row';
             el.innerHTML = `
-                <div class="project-card-body" style="flex: 1; cursor: pointer; min-width: 0;">
-                    <div style="font-weight: bold; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.title}</div>
-                    <div style="font-size: var(--font-size-xsmall); color: var(--text-color-dim);">
+                <div class="project-card-body" data-project-id="${item.id}">
+                    <div class="project-row-title">${item.title}</div>
+                    <div class="project-row-meta">
                         ${item.dateDisplay} — ${item.subtitle || (item.slides + ' slides')}
                     </div>
                 </div>
@@ -34,7 +34,7 @@ nui.registerPage('projects', {
                     <button type="button" aria-label="Delete project"><nui-icon name="delete"></nui-icon></button>
                 </nui-button>
             `;
-            el.querySelector('.project-card-body').addEventListener('click', (ev) => {
+            el.querySelector('[data-project-id]').addEventListener('click', (ev) => {
                 ev.stopPropagation();
                 window.SLIDESHOW_APP.currentProject = item.id;
                 if (window.SLIDESHOW_APP.updateStepper) window.SLIDESHOW_APP.updateStepper();
@@ -117,7 +117,7 @@ nui.registerPage('projects', {
                 }
             } catch (err) {
                 console.error('[Projects] Failed to load:', err);
-                if (list) list.innerHTML = `<div style="padding: var(--nui-space); color: var(--color-danger);">Failed to load projects</div>`;
+                if (list) list.innerHTML = `<div class="projects-load-error">Failed to load projects</div>`;
             }
         }
 

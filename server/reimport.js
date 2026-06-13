@@ -37,7 +37,7 @@ async function main() {
         console.log('Building v3 project (paragraph architecture)...');
         const project = await buildProject(raw, null, (stage, message, pct) => {
             if (message) console.log(`  [${stage}] ${message} (${pct.toFixed(0)}%)`);
-        }, { useLLM: true });
+        }, { skipClean: SKIP_CLEAN });
 
         project._id = PROJECT_ID;
         project.createdAt = Date.now();

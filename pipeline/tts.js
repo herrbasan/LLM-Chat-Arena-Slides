@@ -51,7 +51,7 @@ function computeRenderHash(text, voice, speed) {
         h2 = Math.imul(h2 ^ ch, 1597334677);
     }
     h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
     return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
 }
 
@@ -158,12 +158,9 @@ async function processProject(project, outputDir) {
 // ─── v2: Slide-level TTS (legacy) ─────────────────────────────
 
 function getSlideText(slide) {
-    let text;
-    if (slide.type === 'title' || slide.type === 'end') {
-        text = slide.narration || slide.text || '';
-    } else {
-        text = slide.text || slide.narration || '';
-    }
+    const text = (slide.type === 'topic' || slide.type === 'end')
+        ? (slide.narration || slide.text || '')
+        : (slide.text || slide.narration || '');
     return getSpokenText(text);
 }
 

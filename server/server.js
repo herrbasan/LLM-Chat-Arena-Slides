@@ -74,6 +74,108 @@ function getProjectCacheDir(projectId) {
     return dir;
 }
 
+function getProjectRenderProgressPath(projectId) {
+    return path.join(getProjectCacheDir(projectId), 'render-progress.json');
+}
+
+function writeRenderProgress(projectId, stage, message, pct) {
+    try {
+        fs.writeFileSync(
+            getProjectRenderProgressPath(projectId),
+            JSON.stringify({ stage, message, pct, ts: Date.now() }, null, 2),
+            'utf-8'
+        );
+    } catch (err) {
+        // Progress is best-effort; never let it break the render.
+        console.error('[v3 Render] progress write failed:', err.message);
+    }
+}
+
+async function renderParagraph(project, msgIdx, paraIdx, cacheDir, nVoiceAvailable) {
+    const msg = project.messages[msgIdx];
+    const para = msg.paragraphs[paraIdx];
+    const role = msg.speaker || 'narrator';
+    const voiceConfig = project.voiceMapping?.[role] || project.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
+    const renderHash = computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed);
+    const projectId = path.basename(cacheDir);
+    const audioFile = `msg_${msgIdx}_p_${paraIdx}_${renderHash}.mp3`;
+    const audioPath = path.join(cacheDir, audioFile);
+    const audioUrl = `/cache/audio/${projectId}/${audioFile}`;
+
+    // Paragraph is fresh if its stored hash matches current text/voice/speed,
+    // the audio file exists, and alignment is at the current version.
+    const isFresh = para.renderHash === renderHash
+        && para.audioPath
+        && fs.existsSync(para.audioPath)
+        && para.alignVersion === ALIGNMENT_VERSION
+        && para.words?.length > 0;
+
+    if (isFresh) {
+        return { rendered: false, aligned: false };
+    }
+
+    // Clear stale render data for this paragraph. Old audio file will be
+    // overwritten or cleaned up later.
+    delete para.audioUrl;
+    delete para.audioFile;
+    delete para.audioPath;
+    delete para.words;
+    delete para.durationMs;
+    delete para.alignComplete;
+    delete para.alignVersion;
+    delete para.alignError;
+    delete para.ttsError;
+
+    // Generate TTS
+    console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: generating TTS...`);
+    const ttsUrl = `${process.env.NSPEECH_URL}/tts?` + new URLSearchParams({
+        text: para.text,
+        voice_name: voiceConfig.voice,
+        speed: (voiceConfig.speed || 1.0).toString(),
+        output_format: 'mp3'
+    }).toString();
+
+    const ttsRes = await fetch(ttsUrl);
+    if (!ttsRes.ok) {
+        console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} TTS failed: HTTP ${ttsRes.status}`);
+        para.renderHash = renderHash;
+        para.ttsError = `TTS HTTP ${ttsRes.status}`;
+        return { rendered: false, aligned: false, error: para.ttsError };
+    }
+
+    const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
+    fs.writeFileSync(audioPath, audioBuffer);
+
+    para.audioFile = audioFile;
+    para.audioPath = audioPath;
+    para.audioUrl = audioUrl;
+    para.renderHash = renderHash;
+    para.voice = voiceConfig.voice;
+    para.speed = voiceConfig.speed;
+    para.byteLength = audioBuffer.length;
+
+    // Align immediately while the audio is fresh.
+    let aligned = false;
+    if (nVoiceAvailable) {
+        try {
+            const alignRes = await alignParagraph(para, msgIdx, paraIdx);
+            if (alignRes) {
+                para.words = alignRes.words;
+                para.durationMs = alignRes.durationMs;
+                para.alignComplete = alignRes.alignComplete;
+                para.alignVersion = ALIGNMENT_VERSION;
+                aligned = true;
+                console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: aligned ${alignRes.words.length} words`);
+            }
+        } catch (err) {
+            console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} alignment failed:`, err.message);
+            para.alignError = err.message;
+        }
+    }
+
+    return { rendered: true, aligned };
+}
+
 function computeRenderHash(text, voice, speed) {
     const state = `${text || ''}|${voice || ''}|${speed || 1.0}`;
     // Portable 64-bit hash (hex, safe for filenames, consistent with client)
@@ -206,35 +308,10 @@ app.get('/api/projects/:id', (req, res) => {
     const doc = db.get(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Project not found' });
 
-    // v3 projects: merge render cache from project_v3.json
+    // v3 projects: render state is authoritative only from nDB.
+    // The render output directory is not a cache; it is rewritten
+    // from scratch on every render, so we do not merge it back here.
     if (doc.version === 3) {
-        const projectPath = path.join(getProjectCacheDir(req.params.id), 'project_v3.json');
-        if (fs.existsSync(projectPath)) {
-            const cached = JSON.parse(fs.readFileSync(projectPath, 'utf-8'));
-            if (cached.messages && doc.messages) {
-                for (let mi = 0; mi < doc.messages.length; mi++) {
-                    const cachedMsg = cached.messages[mi];
-                    if (!cachedMsg?.paragraphs) continue;
-                    if (!doc.messages[mi].paragraphs) continue;
-                    for (let pi = 0; pi < doc.messages[mi].paragraphs.length; pi++) {
-                        const cachedPara = cachedMsg.paragraphs[pi];
-                        if (!cachedPara) continue;
-                        const para = doc.messages[mi].paragraphs[pi];
-                        // Merge render data from cache
-                        if (cachedPara.audioUrl) para.audioUrl = cachedPara.audioUrl;
-                        if (cachedPara.audioFile) para.audioFile = cachedPara.audioFile;
-                        if (cachedPara.audioPath) para.audioPath = cachedPara.audioPath;
-                        if (cachedPara.renderHash) para.renderHash = cachedPara.renderHash;
-                        if (cachedPara.voice) para.voice = cachedPara.voice;
-                        if (cachedPara.speed) para.speed = cachedPara.speed;
-                        if (cachedPara.words) para.words = cachedPara.words;
-                        if (cachedPara.durationMs) para.durationMs = cachedPara.durationMs;
-                        if (cachedPara.alignComplete !== undefined) para.alignComplete = cachedPara.alignComplete;
-                        if (cachedPara.alignVersion) para.alignVersion = cachedPara.alignVersion;
-                    }
-                }
-            }
-        }
         return res.json(doc);
     }
 
@@ -402,7 +479,7 @@ app.post('/api/v3/generate-deck', async (req, res) => {
     if (!useSSE) {
         try {
             console.log(`[Server] v3 Generate: ${arenaData.messages.length} messages`);
-            const project = await buildProject(arenaData, null, null, { useLLM: true });
+            const project = await buildProject(arenaData, null, null, { skipClean: false });
             res.json(project);
         } catch (err) {
             console.error('[Server] v3 Generate failed:', err.message);
@@ -435,7 +512,7 @@ app.post('/api/v3/generate-deck', async (req, res) => {
         console.log(`[Server] v3 Generate (SSE): ${arenaData.messages.length} messages`);
         const project = await buildProject(arenaData, null, (stage, message, pct) => {
             send('progress', { stage, message, pct });
-        }, { useLLM: true });
+        }, { skipClean: false });
         const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
         send('done', { messageCount: project.messages.length, paragraphCount: totalParagraphs });
         send('result', project);
@@ -742,107 +819,87 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
 
         const cacheDir = getProjectCacheDir(projectId);
         const projectPath = path.join(cacheDir, 'project_v3.json');
-
-        // Always start fresh — wipe all previously rendered files.
-        // A paragraph is either rendered or unrendered; there is no
-        // "stale cache" concept. Re-rendering always regenerates
-        // everything so the output is guaranteed consistent.
-        if (fs.existsSync(cacheDir)) {
-            fs.rmSync(cacheDir, { recursive: true, force: true });
-        }
         fs.mkdirSync(cacheDir, { recursive: true });
 
-        // TTS: generate audio for every paragraph
-        let ttsGenerated = 0;
-        for (let msgIdx = 0; msgIdx < project.messages.length; msgIdx++) {
-            const msg = project.messages[msgIdx];
-            const role = msg.speaker || 'narrator';
-            const voiceConfig = project.voiceMapping?.[role] || project.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
+        const targets = req.body.targets;
+        const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
 
-            for (let paraIdx = 0; paraIdx < msg.paragraphs.length; paraIdx++) {
-                const para = msg.paragraphs[paraIdx];
-                if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
-
-                const renderHash = computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed);
-                const audioFile = `msg_${msgIdx}_p_${paraIdx}_${renderHash}.mp3`;
-                const audioPath = path.join(cacheDir, audioFile);
-                const audioUrl = `/cache/audio/${projectId}/${audioFile}`;
-
-                // Generate TTS
-                console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: generating TTS...`);
-                const ttsUrl = `${process.env.NSPEECH_URL}/tts?` + new URLSearchParams({
-                    text: para.text,
-                    voice_name: voiceConfig.voice,
-                    speed: (voiceConfig.speed || 1.0).toString(),
-                    output_format: 'mp3'
-                }).toString();
-
-                const ttsRes = await fetch(ttsUrl);
-                if (!ttsRes.ok) {
-                    console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} TTS failed: HTTP ${ttsRes.status}`);
-                    para.renderHash = renderHash;
-                    para.ttsError = `TTS HTTP ${ttsRes.status}`;
-                    continue;
-                }
-
-                const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
-                fs.writeFileSync(audioPath, audioBuffer);
-
-                para.audioFile = audioFile;
-                para.audioPath = audioPath;
-                para.audioUrl = audioUrl;
-                para.renderHash = renderHash;
-                para.voice = voiceConfig.voice;
-                para.speed = voiceConfig.speed;
-                para.byteLength = audioBuffer.length;
-                ttsGenerated++;
-            }
-        }
-
-        // Save intermediate state (TTS done, alignment pending)
-        fs.writeFileSync(projectPath, JSON.stringify(project, null, 2), 'utf-8');
-
-        // Alignment: run nVoice on each paragraph that has audio but no words
+        // Check nVoice availability once up front.
         let nVoiceAvailable = false;
         try {
             const nvRes = await fetch(process.env.NVOICE_URL, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
             nVoiceAvailable = nvRes.ok;
         } catch {}
 
-        let alignAttempted = 0;
+        let processedCount = 0;
+        let renderedCount = 0;
         let alignSucceeded = 0;
 
-        if (nVoiceAvailable) {
-            console.log(`[v3 Render] ${ttsGenerated} paragraphs rendered. Running alignment...`);
+        writeRenderProgress(projectId, 'render', 'Starting render...', 0);
 
-            for (let msgIdx = 0; msgIdx < project.messages.length; msgIdx++) {
-                const msg = project.messages[msgIdx];
-                for (let paraIdx = 0; paraIdx < msg.paragraphs.length; paraIdx++) {
-                    const para = msg.paragraphs[paraIdx];
-                    if (!para.audioPath || para.ttsError) continue;
-                    if (!fs.existsSync(para.audioPath)) continue;
-                    if (para.alignVersion === ALIGNMENT_VERSION && para.words?.length > 0) continue;
+        for (let msgIdx = 0; msgIdx < project.messages.length; msgIdx++) {
+            const msg = project.messages[msgIdx];
 
-                    alignAttempted++;
-                    try {
-                        const alignRes = await alignParagraph(para, msgIdx, paraIdx);
-                        if (alignRes) {
-                            para.words = alignRes.words;
-                            para.durationMs = alignRes.durationMs;
-                            para.alignComplete = alignRes.alignComplete;
-                            para.alignVersion = ALIGNMENT_VERSION;
-                            alignSucceeded++;
-                            console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: aligned ${alignRes.words.length} words`);
+            for (let paraIdx = 0; paraIdx < msg.paragraphs.length; paraIdx++) {
+                const para = msg.paragraphs[paraIdx];
+                if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
+
+                // If targets are specified, skip paragraphs not in the target list.
+                if (targets && !targets.some(t => t.msgIdx === msgIdx && t.paraIdx === paraIdx)) {
+                    continue;
+                }
+
+                processedCount++;
+                const result = await renderParagraph(project, msgIdx, paraIdx, cacheDir, nVoiceAvailable);
+                if (result.rendered) renderedCount++;
+                if (result.aligned) alignSucceeded++;
+
+                if (processedCount % 5 === 0 || processedCount === totalParagraphs) {
+                    const pct = Math.min(99, Math.floor((processedCount / totalParagraphs) * 100));
+                    writeRenderProgress(projectId, 'render', `Paragraph ${processedCount}/${totalParagraphs}`, pct);
+                }
+
+                // Persist intermediate state so the UI can refresh status dots.
+                if (processedCount % 10 === 0) {
+                    fs.writeFileSync(projectPath, JSON.stringify(project, null, 2), 'utf-8');
+                    if (db) {
+                        const existing = db.get(projectId);
+                        if (existing) {
+                            db.update(projectId, {
+                                ...existing,
+                                version: 3,
+                                messages: project.messages,
+                                voiceMapping: project.voiceMapping,
+                                source: project.source,
+                                updatedAt: Date.now()
+                            });
                         }
-                    } catch (err) {
-                        console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} alignment failed:`, err.message);
-                        para.alignError = err.message;
                     }
                 }
             }
-            console.log(`[v3 Render] Alignment complete: ${alignSucceeded}/${alignAttempted} succeeded`);
-        } else {
-            console.log(`[v3 Render] ${ttsGenerated} paragraphs rendered. nVoice unavailable — skipping alignment.`);
+        }
+
+        // Garbage-collect orphaned audio files: any file whose hash no longer
+        // matches a current paragraph's render hash is deleted.
+        const validHashes = new Set();
+        for (let msgIdx = 0; msgIdx < project.messages.length; msgIdx++) {
+            const msg = project.messages[msgIdx];
+            const role = msg.speaker || 'narrator';
+            const voiceConfig = project.voiceMapping?.[role] || project.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
+            for (let paraIdx = 0; paraIdx < msg.paragraphs.length; paraIdx++) {
+                const para = msg.paragraphs[paraIdx];
+                if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
+                validHashes.add(computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed));
+            }
+        }
+        if (fs.existsSync(cacheDir)) {
+            for (const file of fs.readdirSync(cacheDir)) {
+                if (!file.endsWith('.mp3')) continue;
+                const hashMatch = file.match(/_([a-f0-9]{16})\.mp3$/);
+                if (hashMatch && !validHashes.has(hashMatch[1])) {
+                    fs.unlinkSync(path.join(cacheDir, file));
+                }
+            }
         }
 
         // Save final state with alignment data
@@ -863,11 +920,58 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
             }
         }
 
-        const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
-        console.log(`[v3 Render] Complete for ${projectId}: ${ttsGenerated} rendered, ${alignSucceeded} aligned, ${totalParagraphs} total paragraphs`);
+        console.log(`[v3 Render] Complete for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${processedCount} processed`);
+        writeRenderProgress(projectId, 'done', `Render complete: ${renderedCount} re-rendered, ${alignSucceeded} aligned`, 100);
         res.json(project);
     } catch (err) {
         console.error('[Server] v3 Render failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── v3 Render Single Message ──────────────────────────────
+
+app.post('/api/v3/render-message/:id/:msgIdx', async (req, res) => {
+    try {
+        const projectId = req.params.id;
+        const msgIdx = parseInt(req.params.msgIdx, 10);
+
+        if (!db) return res.status(500).json({ error: 'Database not available' });
+        const doc = db.get(projectId);
+        if (!doc) return res.status(404).json({ error: 'Project not found' });
+        if (doc.version !== 3) return res.status(400).json({ error: 'Not a v3 project' });
+
+        const msg = doc.messages?.[msgIdx];
+        if (!msg) return res.status(400).json({ error: `Invalid message index: ${msgIdx}` });
+
+        const cacheDir = getProjectCacheDir(projectId);
+        const projectPath = path.join(cacheDir, 'project_v3.json');
+
+        let nVoiceAvailable = false;
+        try {
+            const nvRes = await fetch(process.env.NVOICE_URL, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
+            nVoiceAvailable = nvRes.ok;
+        } catch {}
+
+        let renderedCount = 0;
+        let alignSucceeded = 0;
+
+        for (let paraIdx = 0; paraIdx < msg.paragraphs.length; paraIdx++) {
+            const para = msg.paragraphs[paraIdx];
+            if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
+
+            const result = await renderParagraph(doc, msgIdx, paraIdx, cacheDir, nVoiceAvailable);
+            if (result.rendered) renderedCount++;
+            if (result.aligned) alignSucceeded++;
+        }
+
+        fs.writeFileSync(projectPath, JSON.stringify(doc, null, 2), 'utf-8');
+        db.update(projectId, { ...doc, updatedAt: Date.now() });
+
+        console.log(`[v3 Render] Message ${msgIdx} complete for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned`);
+        res.json({ message: msg, renderedCount, alignSucceeded });
+    } catch (err) {
+        console.error('[Server] v3 render-message failed:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
@@ -967,6 +1071,22 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
     } catch (err) {
         console.error('[Server] v3 render-paragraph failed:', err.message);
         res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── v3 Render Progress (polling) ──────────────────────────
+
+app.get('/api/v3/render-progress/:id', (req, res) => {
+    try {
+        const progressPath = getProjectRenderProgressPath(req.params.id);
+        if (!fs.existsSync(progressPath)) {
+            return res.json({ stage: 'idle', message: 'No active render', pct: 0 });
+        }
+        const data = JSON.parse(fs.readFileSync(progressPath, 'utf-8'));
+        res.json(data);
+    } catch (err) {
+        console.error('[Server] v3 render-progress failed:', err.message);
+        res.status(500).json({ stage: 'error', message: err.message, pct: 0 });
     }
 });
 

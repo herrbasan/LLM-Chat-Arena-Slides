@@ -17,6 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const { cleanAllMessages } = require('./clean.js');
 const { parseArenaExport } = require('./importer.js');
+const { buildOpeningSlides, buildEndSlide } = require('./build-deck.js');
 
 // ─── Voice config ─────────────────────────────────────────────
 
@@ -83,6 +84,7 @@ function buildMessages(source, progress) {
             speaker: role,
             label: label,
             role: m.role || 'assistant',
+            type: 'conversation',
             createdAt: m.createdAt || null,
             originalSpeaker: m.speaker,
             paragraphs: paragraphs.map(p => ({ text: p }))
@@ -108,6 +110,7 @@ function buildMessages(source, progress) {
  * @returns {Object} v3 project: { version: 3, source, voiceMapping, messages[] }
  */
 async function buildProject(sourceData, outputDir = null, progress = () => {}, options = {}) {
+    progress = typeof progress === 'function' ? progress : () => {};
     progress('import', `Loaded ${sourceData.messages?.length || 0} messages`, 10);
 
     // If the input looks like raw Arena JSON (has a moderator message),
@@ -138,7 +141,8 @@ async function buildProject(sourceData, outputDir = null, progress = () => {}, o
     }
 
     // ── Step 1: Clean message text via LLM ─────────────────────
-    if (!options.skipClean) {
+    const skipClean = options.skipClean === true || options.useLLM === false;
+    if (!skipClean) {
         progress('clean', `Cleaning ${source.messages.length} messages via LLM…`, 15);
         await cleanAllMessages(source.messages, (i, total, speaker, cleaned, cached) => {
             progress('clean', `Cleaning message ${i}/${total} (${speaker})`, 15 + Math.floor((i / total) * 10));
@@ -149,7 +153,38 @@ async function buildProject(sourceData, outputDir = null, progress = () => {}, o
 
     // ── Step 2: Split messages into paragraphs ─────────────────
     progress('messages', `Splitting messages into paragraphs…`, 25);
-    const messages = buildMessages(source, progress);
+    const conversationMessages = buildMessages(source, progress);
+
+    // Tag conversation messages with their stable conversation index
+    // so virtual-slide headers keep 1-based numbering regardless of
+    // opening/closing slides being prepended.
+    conversationMessages.forEach((m, i) => { m.conversationIdx = i; });
+
+    // Inject deterministic opening + closing slides as synthetic
+    // narrator messages. This keeps the v3 architecture uniform:
+    // every renderable unit lives in project.messages and has
+    // paragraphs[] + speaker + type.
+    progress('inject', `Injecting opening + closing slides`, 85);
+    function slideToMessage(slide) {
+        return {
+            speaker: slide.speaker || 'narrator',
+            label: slide.label || 'Narrator',
+            role: 'narrator',
+            type: slide.type,
+            text: slide.text || '',
+            narration: slide.narration || slide.text || '',
+            createdAt: null,
+            originalSpeaker: 'narrator',
+            meta: slide.meta || null,
+            paragraphs: splitIntoParagraphs(slide.narration || slide.text || '').map(p => ({ text: p }))
+        };
+    }
+
+    const messages = [
+        ...buildOpeningSlides(source).map(slideToMessage),
+        ...conversationMessages,
+        slideToMessage(buildEndSlide())
+    ];
 
     // ── Step 3: Assemble v3 project ────────────────────────────
     const participants = source.participants.filter(Boolean);
@@ -163,6 +198,10 @@ async function buildProject(sourceData, outputDir = null, progress = () => {}, o
             seedPrompt: source.seedPrompt,
             seedPromptRaw: source.seedPromptRaw,
             participants: participants,
+            // Preserve the original message-level source so the editor's
+            // "Generate with AI" button can re-send the full Arena export
+            // shape to /api/v3/generate-deck for regeneration.
+            messages: source.messages,
             renderedAt: source.renderedAt || source.exportedAt
         },
         voiceMapping: {

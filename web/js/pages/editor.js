@@ -1,6 +1,21 @@
 import { nui } from '/nui/nui.js';
 import { GatewayClient } from '../gateway-client.js';
 
+// Backward-compat helper: older v3 projects stored only paragraph-split
+// messages in deck.messages and did not keep the original message-level
+// source.messages. To regenerate, we need the message-level array the
+// importer expects, so join paragraphs back into a single content string.
+function reconstructSourceMessages(messages) {
+    if (!Array.isArray(messages)) return [];
+    return messages.map(m => ({
+        speaker: m.originalSpeaker || m.label || m.speaker || 'Unknown',
+        role: m.role || 'assistant',
+        content: (m.paragraphs || []).map(p => p.text || '').join('\n\n'),
+        createdAt: m.createdAt || null,
+        model: m.model || m.originalSpeaker || m.speaker || null
+    }));
+}
+
 nui.registerPage('editor', {
     html: 'editor.html',
     async init(element, params, nui) {
@@ -261,11 +276,11 @@ nui.registerPage('editor', {
             const totalParagraphs = messages.reduce((s, m) => s + (m.paragraphs?.length || 0), 0);
             slideDeck.innerHTML = `
                 <nui-card>
-                    <div style="display: flex; justify-content: space-between; align-items: center; gap: var(--nui-space);">
+                    <div class="editor-summary-row">
                         <div>
                             <strong>${messages.length} messages</strong> · ${totalParagraphs} paragraphs
                         </div>
-                        <div style="font-size: var(--font-size-xsmall); color: var(--text-color-dim);">
+                        <div class="editor-summary-badge">
                             v3 paragraph architecture
                         </div>
                     </div>
@@ -284,19 +299,15 @@ nui.registerPage('editor', {
                                     <span class="slide-card-index">${paras.length} paragraphs</span>
                                 </div>
                             </div>
-                            <div style="margin-top: var(--nui-space-half);">
+                            <div class="editor-paragraphs">
                                 ${paras.map((para, paraIdx) => {
                                     const hasAudio = !!para.audioUrl;
                                     const hasWords = para.words?.length > 0;
-                                    const statusDot = hasWords
-                                        ? '<span style="width: 6px; height: 6px; border-radius: 50%; background: var(--color-highlight); display: inline-block;" title="aligned"></span>'
-                                        : (hasAudio
-                                            ? '<span style="width: 6px; height: 6px; border-radius: 50%; background: #d4a017; display: inline-block;" title="audio only"></span>'
-                                            : '<span style="width: 6px; height: 6px; border-radius: 50%; background: var(--text-color-dim); display: inline-block;" title="unrendered"></span>');
+                                    const statusClass = hasWords ? 'status-aligned' : (hasAudio ? 'status-audio' : 'status-unrendered');
                                     return `
-                                        <div style="padding: var(--nui-space-half) 0; ${paraIdx > 0 ? 'border-top: 1px solid var(--border-shade1);' : ''} display: flex; gap: var(--nui-space-half); align-items: flex-start;">
-                                            ${statusDot}
-                                            <span style="font-size: var(--font-size-small); color: var(--text-color); flex: 1;">${escapeHtml(para.text || '').substring(0, 200)}${(para.text || '').length > 200 ? '…' : ''}</span>
+                                        <div class="editor-paragraph ${paraIdx > 0 ? 'editor-paragraph-sep' : ''}">
+                                            <span class="editor-paragraph-status ${statusClass}" title="${hasWords ? 'aligned' : (hasAudio ? 'audio only' : 'unrendered')}"></span>
+                                            <span class="editor-paragraph-text">${escapeHtml(para.text || '').substring(0, 200)}${(para.text || '').length > 200 ? '…' : ''}</span>
                                         </div>
                                     `;
                                 }).join('')}
@@ -561,13 +572,26 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                     actionEl.setLoading?.(true);
                     let progressBanner = nui.components.banner.show({ content: 'Generating…', priority: 'info' });
                     try {
-                        // Re-import from source to regenerate
+                        // Re-import from source to regenerate. The source
+                        // payload must include the original message-level
+                        // messages array; older projects may not have
+                        // source.messages, so reconstruct it from the
+                        // paragraph-split deck.messages.
+                        const sourcePayload = {
+                            ...deck.source,
+                            messages: deck.source?.messages?.length
+                                ? deck.source.messages
+                                : reconstructSourceMessages(deck.messages)
+                        };
                         const res = await fetch('/api/v3/generate-deck', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(deck.source)
+                            body: JSON.stringify(sourcePayload)
                         });
-                        if (!res.ok) throw new Error('Server returned ' + res.status);
+                        if (!res.ok) {
+                            const errText = await res.text().catch(() => '');
+                            throw new Error('Server returned ' + res.status + ': ' + errText.substring(0, 200));
+                        }
                         const generated = await res.json();
                         deck.messages = generated.messages || [];
                         deck.voiceMapping = { ...deck.voiceMapping, ...generated.voiceMapping };

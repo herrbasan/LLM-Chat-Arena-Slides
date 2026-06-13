@@ -1,5 +1,59 @@
 import { nui } from '/nui/nui.js';
 
+const MONTHS = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+];
+const NUMBER_WORDS_0_19 = [
+    'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+    'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'
+];
+const NUMBER_WORDS_VOWEL_NEXT = {
+    1: 'first', 2: 'second', 3: 'third', 5: 'fifth', 8: 'eighth', 9: 'ninth', 12: 'twelfth'
+};
+const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+
+function spell(n) {
+    if (n < 0) return 'negative ' + spell(-n);
+    if (n < 20) return NUMBER_WORDS_0_19[n];
+    if (n < 100) {
+        const t = Math.floor(n / 10);
+        const r = n % 10;
+        return r ? `${TENS[t]}-${NUMBER_WORDS_0_19[r]}` : TENS[t];
+    }
+    if (n < 1000) {
+        const h = Math.floor(n / 100);
+        const r = n % 100;
+        const head = h === 1 ? 'one hundred' : `${NUMBER_WORDS_0_19[h]} hundred`;
+        return r ? `${head} ${spell(r)}` : head;
+    }
+    if (n < 10000) {
+        const th = Math.floor(n / 1000);
+        const rest = n % 1000;
+        const head = th < 20 ? NUMBER_WORDS_0_19[th] + ' thousand' : `${spell(th)} thousand`;
+        return rest ? `${head} ${spell(rest)}` : head;
+    }
+    return String(n);
+}
+
+function capitalize(s) {
+    if (!s) return s;
+    return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function formatHumanDate(iso) {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    const day = d.getUTCDate();
+    const month = MONTHS[d.getUTCMonth()];
+    const year = d.getUTCFullYear();
+    const dayWord = day < 20 && NUMBER_WORDS_VOWEL_NEXT[day]
+        ? NUMBER_WORDS_VOWEL_NEXT[day]
+        : `${spell(day)}th`;
+    return `${month} ${dayWord}, ${spell(year)}`;
+}
+
 nui.registerPage('render', {
     html: 'render.html',
     async init(element, params, nui) {
@@ -45,87 +99,168 @@ nui.registerPage('render', {
             const slides = [];
             const MAX_CHARS_PER_SLIDE = 600;
 
-            // Opening: setup slide
-            slides.push({
-                type: 'setup',
-                text: 'LLM Chat Arena',
-                narration: 'An autonomous conversation between two AI models.',
-                speaker: 'narrator',
-                _virtual: true
-            });
+            const messages = deck.messages || [];
+            const hasOpeningInMessages = messages.length > 0 && messages[0].type === 'setup';
 
-            // Details slide
+            if (hasOpeningInMessages) {
+                // New v3 format: opening/closing slides are synthetic
+                // narrator messages at the start/end of project.messages.
+                for (let msgIdx = 0; msgIdx < messages.length; msgIdx++) {
+                    const msg = messages[msgIdx];
+                    const type = msg.type || 'conversation';
+
+                    if (type === 'conversation') {
+                        const paragraphs = msg.paragraphs || [];
+                        const speaker = msg.speaker || 'narrator';
+                        const label = msg.label || msg.originalSpeaker || speaker;
+
+                        const groups = [];
+                        let currentGroup = [];
+                        let currentChars = 0;
+                        for (let paraIdx = 0; paraIdx < paragraphs.length; paraIdx++) {
+                            const para = paragraphs[paraIdx];
+                            const paraLen = (para.text || '').length;
+                            if (currentGroup.length > 0 && currentChars + paraLen > MAX_CHARS_PER_SLIDE) {
+                                groups.push(currentGroup);
+                                currentGroup = [];
+                                currentChars = 0;
+                            }
+                            currentGroup.push({ paraIdx, para });
+                            currentChars += paraLen;
+                        }
+                        if (currentGroup.length > 0) groups.push(currentGroup);
+
+                        for (let splitIdx = 0; splitIdx < groups.length; splitIdx++) {
+                            slides.push(buildConversationSlide(groups[splitIdx], msgIdx, speaker, label, msg, splitIdx, groups.length));
+                        }
+                    } else {
+                        // setup/details/topic/end: one slide per message
+                        const paragraphs = (msg.paragraphs || []).map((p, pi) => ({
+                            msgIdx,
+                            paraIdx: pi,
+                            text: p.text,
+                            audioUrl: p.audioUrl,
+                            words: p.words,
+                            durationMs: p.durationMs,
+                            renderHash: p.renderHash,
+                            alignComplete: p.alignComplete,
+                            alignVersion: p.alignVersion
+                        }));
+                        const text = msg.text || (type === 'setup' ? 'Setup' : type === 'details' ? 'Details' : type === 'end' ? 'End of conversation.' : '');
+                        const narration = msg.narration || paragraphs.map(p => p.text).join('\n\n') || text;
+                        const tts = paragraphs.length > 0 ? {
+                            audioUrl: paragraphs[0]?.audioUrl,
+                            renderHash: paragraphs.map(p => p.renderHash).join('|'),
+                            durationMs: paragraphs.reduce((sum, p) => sum + (p.durationMs || 0), 0)
+                        } : null;
+                        slides.push({
+                            type,
+                            text,
+                            narration,
+                            speaker: msg.speaker || 'narrator',
+                            label: msg.label || 'Narrator',
+                            meta: type === 'details' ? (msg.meta || buildDetailsMetaFromSource()) : null,
+                            _virtual: true,
+                            _paragraphs: paragraphs,
+                            tts
+                        });
+                    }
+                }
+            } else {
+                // Legacy v3 format: messages are conversation only;
+                // reconstruct opening/closing from source.
+                const source = deck.source || {};
+                const models = (source.participants || []).map((name, i) => ({
+                    name,
+                    role: i === 0 ? 'participantA' : 'participantB'
+                }));
+                const turnCount = messages.length;
+                const dateText = formatHumanDate(source.exportedAt) || 'an unknown date';
+                const participantLine = source.participants?.length >= 2
+                    ? `${source.participants[0]} and ${source.participants[1]}`
+                    : (source.participants?.[0] || 'two language models');
+
+                slides.push({
+                    type: 'setup',
+                    text: 'Setup',
+                    narration: "You're about to hear a conversation between two language models. They were given a single prompt — a topic — and then left to respond to each other directly, with no further human involvement. What follows is unedited and unsteered. The models chose every word themselves.",
+                    speaker: 'narrator',
+                    _virtual: true
+                });
+
+                slides.push({
+                    type: 'details',
+                    text: 'Details',
+                    narration: `This recording was generated on ${dateText}, featuring the models ${participantLine}. ${turnCount === 1 ? 'One' : capitalize(spell(turnCount))} turn${turnCount === 1 ? '' : 's'}.`,
+                    speaker: 'narrator',
+                    meta: {
+                        recordedAt: source.exportedAt,
+                        renderedAt: source.renderedAt,
+                        models,
+                        turnCount
+                    },
+                    _virtual: true
+                });
+
+                slides.push({
+                    type: 'topic',
+                    text: source.seedPromptRaw || source.seedPrompt || source.topic || '',
+                    narration: source.seedPromptRaw || source.seedPrompt || source.topic || '',
+                    speaker: 'narrator',
+                    _virtual: true
+                });
+
+                for (let msgIdx = 0; msgIdx < messages.length; msgIdx++) {
+                    const msg = messages[msgIdx];
+                    const paragraphs = msg.paragraphs || [];
+                    const speaker = msg.speaker || 'narrator';
+                    const label = msg.label || msg.originalSpeaker || speaker;
+
+                    const groups = [];
+                    let currentGroup = [];
+                    let currentChars = 0;
+                    for (let paraIdx = 0; paraIdx < paragraphs.length; paraIdx++) {
+                        const para = paragraphs[paraIdx];
+                        const paraLen = (para.text || '').length;
+                        if (currentGroup.length > 0 && currentChars + paraLen > MAX_CHARS_PER_SLIDE) {
+                            groups.push(currentGroup);
+                            currentGroup = [];
+                            currentChars = 0;
+                        }
+                        currentGroup.push({ paraIdx, para });
+                        currentChars += paraLen;
+                    }
+                    if (currentGroup.length > 0) groups.push(currentGroup);
+
+                    for (let splitIdx = 0; splitIdx < groups.length; splitIdx++) {
+                        slides.push(buildConversationSlide(groups[splitIdx], msgIdx, speaker, label, msg, splitIdx, groups.length));
+                    }
+                }
+
+                slides.push({
+                    type: 'end',
+                    text: 'End of conversation.',
+                    narration: 'End of conversation.',
+                    speaker: 'narrator',
+                    _virtual: true
+                });
+            }
+
+            return slides;
+        }
+
+        function buildDetailsMetaFromSource() {
             const source = deck.source || {};
             const models = (source.participants || []).map((name, i) => ({
                 name,
                 role: i === 0 ? 'participantA' : 'participantB'
             }));
-            slides.push({
-                type: 'details',
-                text: source.topic || 'Untitled',
-                narration: source.topic || 'Untitled',
-                speaker: 'narrator',
-                meta: {
-                    recordedAt: source.exportedAt,
-                    renderedAt: source.renderedAt,
-                    models,
-                    turnCount: deck.messages.length
-                },
-                _virtual: true
-            });
-
-            // Topic slide — speak the seed prompt
-            slides.push({
-                type: 'topic',
-                text: source.seedPromptRaw || source.seedPrompt || source.topic || '',
-                narration: source.seedPromptRaw || source.seedPrompt || source.topic || '',
-                speaker: 'narrator',
-                _virtual: true
-            });
-
-            // Conversation: group paragraphs into virtual slides
-            for (let msgIdx = 0; msgIdx < deck.messages.length; msgIdx++) {
-                const msg = deck.messages[msgIdx];
-                const paragraphs = msg.paragraphs || [];
-                const speaker = msg.speaker || 'narrator';
-                const label = msg.label || msg.originalSpeaker || speaker;
-
-                // First pass: collect groups
-                const groups = [];
-                let currentGroup = [];
-                let currentChars = 0;
-
-                for (let paraIdx = 0; paraIdx < paragraphs.length; paraIdx++) {
-                    const para = paragraphs[paraIdx];
-                    const paraLen = (para.text || '').length;
-
-                    if (currentGroup.length > 0 && currentChars + paraLen > MAX_CHARS_PER_SLIDE) {
-                        groups.push(currentGroup);
-                        currentGroup = [];
-                        currentChars = 0;
-                    }
-
-                    currentGroup.push({ paraIdx, para });
-                    currentChars += paraLen;
-                }
-                if (currentGroup.length > 0) groups.push(currentGroup);
-
-                // Second pass: build slides with splitIdx/splitCount
-                for (let splitIdx = 0; splitIdx < groups.length; splitIdx++) {
-                    slides.push(buildConversationSlide(groups[splitIdx], msgIdx, speaker, label, msg, splitIdx, groups.length));
-                }
-            }
-
-            // End slide
-            slides.push({
-                type: 'end',
-                text: 'End of conversation.',
-                narration: 'End of conversation.',
-                speaker: 'narrator',
-                _virtual: true
-            });
-
-            return slides;
+            return {
+                recordedAt: source.exportedAt,
+                renderedAt: source.renderedAt,
+                models,
+                turnCount: (deck.messages || []).filter(m => m.type === 'conversation' || !m.type).length
+            };
         }
 
         function buildConversationSlide(group, msgIdx, speaker, label, msg, splitIdx, splitCount) {
@@ -149,7 +284,7 @@ nui.registerPage('render', {
                 text,
                 speaker,
                 label,
-                originalIdx: msgIdx,
+                originalIdx: msg.conversationIdx ?? msgIdx,
                 createdAt: msg.createdAt,
                 splitIdx,
                 splitCount,
@@ -170,7 +305,8 @@ nui.registerPage('render', {
             deck.slides = virtualSlides;
         }
 
-        const slideList = element.querySelector('#render-slide-list');
+
+        const messageList = element.querySelector('#render-message-list');
         const playerContent = element.querySelector('#player-slide-content');
         const progressBar = element.querySelector('#playback-progress-bar');
         const progressFill = element.querySelector('#playback-progress-fill');
@@ -178,6 +314,8 @@ nui.registerPage('render', {
         const btnPlay = element.querySelector('#btn-play');
         const btnSpeed = element.querySelector('#btn-speed');
         const renderProgress = element.querySelector('#render-progress');
+        const renderProgressWrap = element.querySelector('#render-progress-wrap');
+        const renderProgressText = element.querySelector('#render-progress-text');
         const renderStatus = element.querySelector('#render-status');
 
         let currentSlideIdx = 0;
@@ -503,64 +641,143 @@ nui.registerPage('render', {
             return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
         }
 
+        let renderingMessages = new Set();
         let renderingSlides = new Set();
 
-        function renderSlideList() {
-            const slides = deck.slides || [];
-            if (slides.length === 0) {
-                slideList.innerHTML = '<p style="color: var(--text-color-dim);">No slides to render.</p>';
+        function computeMessageStaleness(msg) {
+            const voiceConfig = deck.voiceMapping?.[msg.speaker || 'narrator'] || deck.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
+            const paragraphs = msg.paragraphs || [];
+            if (paragraphs.length === 0) return 'unrendered';
+
+            let hasFresh = false;
+            let hasStale = false;
+            let hasUnrendered = false;
+
+            for (const para of paragraphs) {
+                if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
+                const renderHash = computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed);
+                const isFresh = para.renderHash === renderHash
+                    && para.audioPath
+                    && para.words?.length > 0;
+                if (isFresh) {
+                    hasFresh = true;
+                } else if (para.audioPath || para.renderHash) {
+                    hasStale = true;
+                } else {
+                    hasUnrendered = true;
+                }
+            }
+
+            if (hasStale) return 'stale';
+            if (hasUnrendered) return 'unrendered';
+            if (hasFresh) return 'fresh';
+            return 'unrendered';
+        }
+
+        function renderMessageList() {
+            const messages = deck.messages || [];
+            if (messages.length === 0) {
+                messageList.innerHTML = '<p class="render-status-hint">No messages to render.</p>';
+                renderStatus.innerHTML = '<p class="render-status-hint">No messages.</p>';
                 return;
             }
 
-            const counts = { fresh: 0, stale: 0, unrendered: 0, rendering: renderingSlides.size };
-            slides.forEach(s => { counts[computeStaleness(s)]++; });
+            const counts = { fresh: 0, stale: 0, unrendered: 0, rendering: renderingMessages.size };
+            messages.forEach(m => { counts[computeMessageStaleness(m)]++; });
 
-            // Compact status indicator: a small colored dot + label. Used in
-            // the Render card and per-row on the Slides card. Inline span with
-            // a CSS variable for the dot color so we don't need a NUI badge.
-            const dotColor = {
-                fresh: 'var(--color-highlight)',
-                stale: '#d4a017',
-                unrendered: 'var(--text-color-dim)',
-                rendering: 'var(--text-color-dim)'
-            };
             const statusLabel = {
                 fresh: 'ready',
                 stale: 'stale',
                 unrendered: 'unrendered',
                 rendering: 'rendering…'
             };
-            const statusDot = (s) => `<span style="display: inline-flex; align-items: center; gap: 4px; font-size: var(--font-size-xsmall); color: var(--text-color-dim);">
-                <span style="width: 6px; height: 6px; border-radius: 50%; background: ${dotColor[s]}; display: inline-block; flex-shrink: 0; ${s === 'rendering' ? 'opacity: 0.5;' : ''}"></span>
-                <span>${counts[s]} ${statusLabel[s]}</span>
+            const statusDot = (s) => `<span class="render-status-dot ${s}">
+                <span class="render-status-dot__mark"></span>
+                <span class="render-status-dot__label">${counts[s]} ${statusLabel[s]}</span>
             </span>`;
 
             renderStatus.innerHTML = `
-                <div style="display: flex; gap: var(--nui-space); flex-wrap: wrap;">
+                <div class="render-status-row">
                     ${counts.fresh ? statusDot('fresh') : ''}
                     ${counts.stale ? statusDot('stale') : ''}
                     ${counts.unrendered ? statusDot('unrendered') : ''}
                     ${counts.rendering ? statusDot('rendering') : ''}
-                    ${(counts.fresh + counts.stale + counts.unrendered + counts.rendering) === 0 ? '<span style="color: var(--text-color-dim); font-size: var(--font-size-xsmall);">no slides</span>' : ''}
+                    ${(counts.fresh + counts.stale + counts.unrendered + counts.rendering) === 0 ? '<span class="render-status-hint">no messages</span>' : ''}
                 </div>
             `;
 
-            slideList.innerHTML = slides.map((slide, idx) => {
+            messageList.innerHTML = messages.map((msg, idx) => {
+                const isRendering = renderingMessages.has(idx);
+                const status = isRendering ? 'rendering' : computeMessageStaleness(msg);
+                const isNonConversation = msg.type && msg.type !== 'conversation';
+                const label = isNonConversation
+                    ? (msg.type.charAt(0).toUpperCase() + msg.type.slice(1))
+                    : (msg.label || msg.originalSpeaker || msg.speaker || `Message ${idx + 1}`);
+                const paraCount = (msg.paragraphs || []).length;
+                return `
+                    <div data-msg-idx="${idx}" class="render-slide-row ${status !== 'fresh' && !isRendering ? 'is-dimmed' : ''}" title="${escapeHtml(label)} (${statusLabel[status]})">
+                        <span class="render-slide-row__dot ${status}" data-msg-idx="${idx}"></span>
+                        <span class="render-slide-row__label" data-msg-idx="${idx}">${escapeHtml(label)} <span class="render-message-meta">${paraCount}p</span></span>
+                        ${!isRendering ? `<span class="render-slide-row__action"><nui-button variant="icon" data-action="render-message:${idx}" title="Render this message"><button type="button" aria-label="Render message ${idx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button></span>` : ''}
+                    </div>
+                `;
+            }).join('');
+
+            // Click to jump to first slide for this message
+            messageList.querySelectorAll('[data-msg-idx]').forEach(el => {
+                el.addEventListener('click', () => {
+                    const idx = parseInt(el.dataset.msgIdx);
+                    const slideIdx = deck.slides.findIndex(s => s._paragraphs?.some(p => p.msgIdx === idx));
+                    if (slideIdx >= 0) loadSlide(slideIdx);
+                });
+            });
+        }
+
+        function renderSlideList() {
+            const slides = deck.slides || [];
+            if (slides.length === 0) {
+                messageList.innerHTML = '<p class="render-status-hint">No slides to render.</p>';
+                return;
+            }
+
+            const counts = { fresh: 0, stale: 0, unrendered: 0, rendering: renderingSlides.size };
+            slides.forEach(s => { counts[computeStaleness(s)]++; });
+
+            const statusLabel = {
+                fresh: 'ready',
+                stale: 'stale',
+                unrendered: 'unrendered',
+                rendering: 'rendering…'
+            };
+            const statusDot = (s) => `<span class="render-status-dot ${s}">
+                <span class="render-status-dot__mark"></span>
+                <span class="render-status-dot__label">${counts[s]} ${statusLabel[s]}</span>
+            </span>`;
+
+            renderStatus.innerHTML = `
+                <div class="render-status-row">
+                    ${counts.fresh ? statusDot('fresh') : ''}
+                    ${counts.stale ? statusDot('stale') : ''}
+                    ${counts.unrendered ? statusDot('unrendered') : ''}
+                    ${counts.rendering ? statusDot('rendering') : ''}
+                </div>
+            `;
+
+            messageList.innerHTML = slides.map((slide, idx) => {
                 const isRendering = renderingSlides.has(idx);
                 const status = isRendering ? 'rendering' : computeStaleness(slide);
                 const isSelected = idx === currentSlideIdx;
                 const headerLabel = buildHeaderLabel(slide, idx);
                 return `
-                    <div data-slide-idx="${idx}" style="display: flex; align-items: center; gap: var(--nui-space-half); padding: 4px var(--nui-space-half) 4px calc(var(--nui-space-half) + 4px); border-radius: var(--border-radius1); border-left: 3px solid ${isSelected ? 'var(--color-highlight)' : 'transparent'}; background: ${isSelected ? 'var(--color-shade2)' : 'transparent'}; ${status !== 'fresh' && !isRendering ? 'opacity: 0.5;' : ''} cursor: pointer;">
-                        <span style="width: 8px; height: 8px; border-radius: 50%; background: ${dotColor[status]}; display: inline-block; flex-shrink: 0; ${status === 'rendering' ? 'opacity: 0.5;' : ''} box-shadow: 0 0 0 1px var(--border-shade2);" title="${statusLabel[status]}" data-slide-idx="${idx}"></span>
-                        <span style="font-size: var(--font-size-small); font-weight: ${isSelected ? '600' : '500'}; color: ${isSelected ? 'var(--text-color)' : 'var(--text-color-dim)'}; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" data-slide-idx="${idx}" title="${escapeHtml(headerLabel)} (${statusLabel[status]})">${escapeHtml(headerLabel)}</span>
-                        ${!isRendering ? `<nui-button variant="icon" data-action="render-slide:${idx}" style="flex-shrink: 0; width: 1.75rem; height: 1.75rem;" title="Render this slide"><button type="button" aria-label="Render slide ${idx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button>` : ''}
+                    <div data-slide-idx="${idx}" class="render-slide-row ${isSelected ? 'is-selected' : ''} ${status !== 'fresh' && !isRendering ? 'is-dimmed' : ''}" title="${escapeHtml(headerLabel)} (${statusLabel[status]})">
+                        <span class="render-slide-row__dot ${status}" data-slide-idx="${idx}"></span>
+                        <span class="render-slide-row__label" data-slide-idx="${idx}">${escapeHtml(headerLabel)}</span>
+                        ${!isRendering ? `<span class="render-slide-row__action"><nui-button variant="icon" data-action="render-slide:${idx}" title="Render this slide"><button type="button" aria-label="Render slide ${idx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button></span>` : ''}
                     </div>
                 `;
             }).join('');
 
-            // Click to jump to slide
-            slideList.querySelectorAll('[data-slide-idx]').forEach(el => {
+            messageList.querySelectorAll('[data-slide-idx]').forEach(el => {
                 el.addEventListener('click', () => {
                     const idx = parseInt(el.dataset.slideIdx);
                     loadSlide(idx);
@@ -568,31 +785,33 @@ nui.registerPage('render', {
             });
         }
 
-        async function renderSingleSlide(idx) {
-            // v3: individual slide render not supported (slides are virtual)
-            if (isV3) {
-                nui.components.banner.show({ content: 'Use "Render All" for v3 projects', priority: 'info', autoClose: 3000 });
-                return;
+        async function renderSingleMessage(idx) {
+            if (!isV3) {
+                // v2: fall back to slide render
+                return renderSingleSlide(idx);
             }
-            renderingSlides.add(idx);
-            renderSlideList();
+            renderingMessages.add(idx);
+            renderMessageList();
 
             try {
-                const res = await fetch(`/api/render-slide/${projectId}/${idx}`, {
+                const res = await fetch(`/api/v3/render-message/${projectId}/${idx}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
                 });
                 if (!res.ok) throw new Error((await res.json()).error || 'Render failed');
-                const { slide } = await res.json();
-                deck.slides[idx] = slide;
+                const { message } = await res.json();
+                deck.messages[idx] = message;
                 window.SLIDESHOW_APP.deck = deck;
+                virtualSlides = buildVirtualSlides();
+                deck.slides = virtualSlides;
                 invalidateSplitIndexCache();
+                nui.components.banner.show({ content: `Message ${idx + 1} rendered`, priority: 'success', autoClose: 2000 });
             } catch (err) {
-                nui.components.banner.show({ content: `Slide ${idx + 1} render failed: ${err.message}`, priority: 'alert', autoClose: 5000 });
+                nui.components.banner.show({ content: `Message ${idx + 1} render failed: ${err.message}`, priority: 'alert', autoClose: 5000 });
             } finally {
-                renderingSlides.delete(idx);
-                renderSlideList();
-                if (idx === currentSlideIdx) loadSlide(idx);
+                renderingMessages.delete(idx);
+                renderMessageList();
+                loadSlide(currentSlideIdx);
             }
         }
 
@@ -604,8 +823,6 @@ nui.registerPage('render', {
             const slides = deck.slides;
             const toRender = [];
             for (let i = 0; i < slides.length; i++) {
-                // Always include all slides — fresh ones will hit the server cache
-                // and return instantly. The visual reset shows progress either way.
                 toRender.push(i);
             }
 
@@ -639,35 +856,97 @@ nui.registerPage('render', {
             }
         }
 
+        function setRenderProgress(visible, pct, message) {
+            if (!renderProgress || !renderProgressWrap) return;
+            renderProgress.setAttribute('value', String(pct));
+            if (renderProgressText) renderProgressText.textContent = message || '';
+            renderProgressWrap.hidden = !visible;
+        }
+
         async function renderAllV3() {
-            // Mark all slides as rendering
-            for (let i = 0; i < deck.slides.length; i++) renderingSlides.add(i);
-            renderSlideList();
+            // Mark all messages as rendering
+            for (let i = 0; i < deck.messages.length; i++) renderingMessages.add(i);
+            renderMessageList();
+            setRenderProgress(true, 0, 'Render starting…');
+
+            let pollTimer = null;
+
+            function updateProgress(message, pct) {
+                setRenderProgress(true, pct, `${message} (${pct}%)`);
+            }
+
+            async function refreshProjectStatus() {
+                try {
+                    const res = await fetch(`/api/projects/${projectId}`);
+                    if (!res.ok) return;
+                    const fresh = await res.json();
+                    if (fresh.messages) {
+                        deck.messages = fresh.messages;
+                        deck.voiceMapping = fresh.voiceMapping || deck.voiceMapping;
+                        window.SLIDESHOW_APP.deck = deck;
+                        virtualSlides = buildVirtualSlides();
+                        deck.slides = virtualSlides;
+                        renderMessageList();
+                    }
+                } catch (err) {
+                    console.warn('[renderAllV3] status refresh failed:', err);
+                }
+            }
+
+            async function pollProgress() {
+                try {
+                    const res = await fetch(`/api/v3/render-progress/${projectId}`);
+                    if (!res.ok) return;
+                    const p = await res.json();
+                    updateProgress(p.message, p.pct);
+                    if (p.stage === 'done') {
+                        clearInterval(pollTimer);
+                    }
+                    // Refresh message status dots every few percent
+                    if (Math.floor(p.pct / 5) !== Math.floor((p.pct - (p.pct > 0 ? 1 : 0)) / 5)) {
+                        await refreshProjectStatus();
+                    }
+                } catch (err) {
+                    console.warn('[renderAllV3] poll failed:', err);
+                }
+            }
 
             try {
+                // Poll every second; server writes progress file every few paragraphs
+                pollTimer = setInterval(pollProgress, 1000);
+
                 const res = await fetch(`/api/v3/render-deck/${projectId}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(deck)
                 });
-                if (!res.ok) throw new Error((await res.json()).error || 'Render failed');
-                const rendered = await res.json();
 
-                // Update deck with rendered data
+                clearInterval(pollTimer);
+
+                if (!res.ok) {
+                    const errText = await res.text().catch(() => '');
+                    let msg = errText;
+                    try { msg = JSON.parse(errText).error || msg; } catch {}
+                    throw new Error(msg || 'Render failed');
+                }
+
+                const rendered = await res.json();
                 deck.messages = rendered.messages;
                 deck.voiceMapping = rendered.voiceMapping;
                 window.SLIDESHOW_APP.deck = deck;
 
-                // Rebuild virtual slides with new render data
                 virtualSlides = buildVirtualSlides();
                 deck.slides = virtualSlides;
 
-                nui.components.banner.show({ content: `Render complete: ${deck.messages.length} messages`, priority: 'success', autoClose: 3000 });
+                updateProgress('Render complete', 100);
+                nui.components.banner.show({ content: `Render complete: ${rendered.messages.length} messages`, priority: 'success', autoClose: 3000 });
             } catch (err) {
+                clearInterval(pollTimer);
+                updateProgress(`Render failed: ${err.message}`, 0);
                 nui.components.banner.show({ content: `Render failed: ${err.message}`, priority: 'alert', autoClose: 5000 });
             } finally {
-                renderingSlides = new Set();
-                renderSlideList();
+                renderingMessages = new Set();
+                renderMessageList();
                 loadSlide(currentSlideIdx);
             }
         }
@@ -679,29 +958,7 @@ nui.registerPage('render', {
             v3CumulativeMs = 0;
             const slide = deck.slides[idx];
 
-            // Update list highlighting. The selected row gets an accent
-            // left border, a tint background, and full-color bold text.
-            // The inline-styled border-left, bg, and label styles here must
-            // stay in sync with the initial render in renderSlideList().
-            slideList.querySelectorAll('[data-slide-idx]').forEach(el => {
-                const isSelected = parseInt(el.dataset.slideIdx) === idx;
-                el.style.borderLeftColor = isSelected ? 'var(--color-highlight)' : 'transparent';
-                el.style.background = isSelected ? 'var(--color-shade2)' : 'transparent';
-                // Update the label's font-weight + color too. The label is
-                // the second [data-slide-idx] on the row (the first is the
-                // dot, which we don't change).
-                const labelEls = el.querySelectorAll('span[data-slide-idx]');
-                const labelEl = labelEls[labelEls.length - 1];
-                if (labelEl) {
-                    labelEl.style.fontWeight = isSelected ? '600' : '500';
-                    labelEl.style.color = isSelected ? 'var(--text-color)' : 'var(--text-color-dim)';
-                }
-            });
-            // Scroll the selected row into view if it's off-screen.
-            const selectedEl = slideList.querySelector(`[data-slide-idx="${idx}"]`);
-            if (selectedEl && selectedEl.scrollIntoView) {
-                selectedEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-            }
+
 
             // ── Body content ──
             //
@@ -746,24 +1003,28 @@ nui.registerPage('render', {
                 // so word-by-word highlighting works.
                 html += renderDetailsMeta(slide.meta);
                 if (slide.narration) {
-                    html += `<div class="slide-narration words-container">${buildWordSpans(slide.narration, slide.tts)}</div>`;
+                    html += `<div class="slide-narration words-container">${buildWordSpans(slide.narration, slide.tts, slide._paragraphs)}</div>`;
                 }
             } else if (style.layout === 'centered') {
                 // Topic slide: large centered text, no header. Words
                 // container overlays the same text for highlighting.
                 html += `<div class="slide-body slide-body--text">${escapeHtml(slide.text || '')}</div>`;
                 if (slide.narration) {
-                    html += `<div class="slide-body words-container">${buildWordSpans(slide.narration, slide.tts)}</div>`;
+                    html += `<div class="slide-body words-container">${buildWordSpans(slide.narration, slide.tts, slide._paragraphs)}</div>`;
                 }
             } else if (style.layout === 'minimal') {
-                // End slide: small centered.
-                html += `<div class="slide-body slide-body--text">${escapeHtml(slide.text || '')}</div>`;
+                // End slide: small centered. Use word spans if aligned.
+                if (slide._paragraphs?.some(p => p.words?.length > 0)) {
+                    html += `<div class="slide-body words-container">${buildWordSpans(slide.narration || slide.text || '', slide.tts, slide._paragraphs)}</div>`;
+                } else {
+                    html += `<div class="slide-body slide-body--text">${escapeHtml(slide.text || '')}</div>`;
+                }
             } else if (style.layout === 'framed') {
                 // Setup slide: framed text, with the narration words
                 // container below for highlighting.
                 html += `<div class="slide-body slide-body--text">${escapeHtml(slide.text || '')}</div>`;
                 if (slide.narration) {
-                    html += `<div class="slide-body words-container">${buildWordSpans(slide.narration, slide.tts)}</div>`;
+                    html += `<div class="slide-body words-container">${buildWordSpans(slide.narration, slide.tts, slide._paragraphs)}</div>`;
                 }
             } else {
                 html += `<div class="slide-body words-container">${buildWordSpans(slide.text || slide.narration || '', slide.tts, slide._paragraphs)}</div>`;
@@ -803,6 +1064,12 @@ nui.registerPage('render', {
                                 `<span class="word future" data-start="${w.startMs}" data-end="${w.endMs}">${escapeHtml(w.word)}</span> `
                             );
                         }
+                    } else if (para.text) {
+                        // Paragraph exists but hasn't been aligned yet (or
+                        // alignment produced no words). Show the text so the
+                        // slide isn't blank; it will gain word timing after
+                        // render/alignment.
+                        wordSpans.push(`<span class="word future">${escapeHtml(para.text)}</span>`);
                     }
                     // Wrap this paragraph's words in a container with para index
                     allSpans.push(`<span class="para-words" data-para-idx="${pi}">${wordSpans.join('')}</span>`);
@@ -1022,6 +1289,11 @@ nui.registerPage('render', {
                 await renderAllSlides();
             }
 
+            if (action === 'render-message') {
+                const idx = parseInt(param, 10);
+                await renderSingleMessage(idx);
+            }
+
             if (action === 'render-slide') {
                 const idx = parseInt(param, 10);
                 await renderSingleSlide(idx);
@@ -1088,7 +1360,11 @@ nui.registerPage('render', {
             }
         });
 
-        renderSlideList();
+        if (isV3) {
+            renderMessageList();
+        } else {
+            renderSlideList();
+        }
         loadSlide(0);
 
         // Router lifecycle: the page is cached (init() runs once).
@@ -1104,13 +1380,16 @@ nui.registerPage('render', {
                 v3CumulativeMs = 0;
                 isPlaying = false;
                 renderingSlides = new Set();
+                renderingMessages = new Set();
                 loadProject(projectId).then(() => {
                     if (deck) {
                         if (isV3) {
                             virtualSlides = buildVirtualSlides();
                             deck.slides = virtualSlides;
+                            renderMessageList();
+                        } else {
+                            renderSlideList();
                         }
-                        renderSlideList();
                         loadSlide(0);
                     }
                 });
