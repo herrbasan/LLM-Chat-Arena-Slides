@@ -323,6 +323,9 @@ nui.registerPage('render', {
         const renderProgressWrap = element.querySelector('#render-progress-wrap');
         const renderProgressText = element.querySelector('#render-progress-text');
         const renderStatus = element.querySelector('#render-status');
+        const btnRenderWrap = element.querySelector('#btn-render-wrap');
+        const btnStopWrap = element.querySelector('#btn-stop-wrap');
+        let renderAllActive = false;
 
         let currentSlideIdx = 0;
         let isPlaying = false;
@@ -869,7 +872,14 @@ nui.registerPage('render', {
             renderProgressWrap.hidden = !visible;
         }
 
+        function setRenderControls(isActive) {
+            renderAllActive = isActive;
+            if (btnRenderWrap) btnRenderWrap.hidden = isActive;
+            if (btnStopWrap) btnStopWrap.hidden = !isActive;
+        }
+
         async function renderAllV3() {
+            setRenderControls(true);
             // Mark all messages as rendering
             for (let i = 0; i < deck.messages.length; i++) renderingMessages.add(i);
             renderMessageList();
@@ -948,12 +958,34 @@ nui.registerPage('render', {
                 nui.components.banner.show({ content: `Render complete: ${rendered.messages.length} messages`, priority: 'success', autoClose: 3000 });
             } catch (err) {
                 clearInterval(pollTimer);
-                updateProgress(`Render failed: ${err.message}`, 0);
-                nui.components.banner.show({ content: `Render failed: ${err.message}`, priority: 'alert', autoClose: 5000 });
+                if (err.name === 'AbortError' || err.message?.includes('aborted')) {
+                    updateProgress('Render stopped', 0);
+                    nui.components.banner.show({ content: 'Render stopped', priority: 'warning', autoClose: 3000 });
+                    await refreshProjectStatus();
+                } else {
+                    updateProgress(`Render failed: ${err.message}`, 0);
+                    nui.components.banner.show({ content: `Render failed: ${err.message}`, priority: 'alert', autoClose: 5000 });
+                }
             } finally {
+                setRenderControls(false);
                 renderingMessages = new Set();
                 renderMessageList();
                 loadSlide(currentSlideIdx);
+            }
+        }
+
+        async function stopRenderAll() {
+            try {
+                const res = await fetch(`/api/v3/render-stop/${projectId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    console.warn('[stopRenderAll]', data.error || 'stop failed');
+                }
+            } catch (err) {
+                console.warn('[stopRenderAll] request failed:', err);
             }
         }
 
@@ -1295,6 +1327,10 @@ nui.registerPage('render', {
 
             if (action === 'render-all') {
                 await renderAllSlides();
+            }
+
+            if (action === 'render-stop') {
+                await stopRenderAll();
             }
 
             if (action === 'render-message') {

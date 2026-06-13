@@ -68,6 +68,10 @@ if (nDB) {
 const RENDER_CACHE_ROOT = path.join(dbPath, 'render_cache');
 fs.mkdirSync(RENDER_CACHE_ROOT, { recursive: true });
 
+// Per-project render abort controllers so the user can stop a
+// long-running Render All operation without restarting the server.
+const renderControllers = new Map();
+
 function getProjectCacheDir(projectId) {
     const dir = path.join(RENDER_CACHE_ROOT, projectId);
     fs.mkdirSync(dir, { recursive: true });
@@ -807,8 +811,14 @@ app.post('/api/render-deck/:id', async (req, res) => {
 // ─── v3 Render Deck (Paragraph Architecture) ───────────────
 
 app.post('/api/v3/render-deck/:id', async (req, res) => {
+    const projectId = req.params.id;
+
+    // If a render is already running for this project, reject the new request.
+    if (renderControllers.has(projectId)) {
+        return res.status(409).json({ error: 'Render already in progress' });
+    }
+
     try {
-        const projectId = req.params.id;
         const project = req.body;
         if (!project || !project.messages || !Array.isArray(project.messages)) {
             return res.status(400).json({ error: 'Invalid v3 project: missing messages array' });
@@ -816,6 +826,9 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         if (project.version !== 3) {
             return res.status(400).json({ error: `Expected version 3, got ${project.version}` });
         }
+
+        const controller = new AbortController();
+        renderControllers.set(projectId, controller);
 
         const cacheDir = getProjectCacheDir(projectId);
         const projectPath = path.join(cacheDir, 'project_v3.json');
@@ -834,13 +847,14 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         let processedCount = 0;
         let renderedCount = 0;
         let alignSucceeded = 0;
+        let stopped = false;
 
         writeRenderProgress(projectId, 'render', 'Starting render...', 0);
 
-        for (let msgIdx = 0; msgIdx < project.messages.length; msgIdx++) {
+        for (let msgIdx = 0; msgIdx < project.messages.length && !controller.signal.aborted; msgIdx++) {
             const msg = project.messages[msgIdx];
 
-            for (let paraIdx = 0; paraIdx < msg.paragraphs.length; paraIdx++) {
+            for (let paraIdx = 0; paraIdx < msg.paragraphs.length && !controller.signal.aborted; paraIdx++) {
                 const para = msg.paragraphs[paraIdx];
                 if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
 
@@ -853,6 +867,11 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
                 const result = await renderParagraph(project, msgIdx, paraIdx, cacheDir, nVoiceAvailable);
                 if (result.rendered) renderedCount++;
                 if (result.aligned) alignSucceeded++;
+
+                if (controller.signal.aborted) {
+                    stopped = true;
+                    break;
+                }
 
                 if (processedCount % 5 === 0 || processedCount === totalParagraphs) {
                     const pct = Math.min(99, Math.floor((processedCount / totalParagraphs) * 100));
@@ -920,13 +939,34 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
             }
         }
 
+        renderControllers.delete(projectId);
+
+        if (stopped) {
+            console.log(`[v3 Render] Stopped for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${processedCount} processed`);
+            writeRenderProgress(projectId, 'stopped', `Render stopped: ${renderedCount} re-rendered, ${alignSucceeded} aligned`, 0);
+            return res.json({ stopped: true, project, renderedCount, alignSucceeded, processedCount });
+        }
+
         console.log(`[v3 Render] Complete for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${processedCount} processed`);
         writeRenderProgress(projectId, 'done', `Render complete: ${renderedCount} re-rendered, ${alignSucceeded} aligned`, 100);
         res.json(project);
     } catch (err) {
+        renderControllers.delete(projectId);
         console.error('[Server] v3 Render failed:', err.message);
         res.status(500).json({ error: err.message });
     }
+});
+
+// ─── v3 Stop Render ────────────────────────────────────────
+
+app.post('/api/v3/render-stop/:id', (req, res) => {
+    const projectId = req.params.id;
+    const controller = renderControllers.get(projectId);
+    if (!controller) {
+        return res.status(409).json({ error: 'No render in progress' });
+    }
+    controller.abort();
+    res.json({ stopped: true });
 });
 
 // ─── v3 Render Single Message ──────────────────────────────

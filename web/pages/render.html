@@ -5,8 +5,11 @@
             <nui-card>
                 <div class="render-status-card">
                     <h3>Render</h3>
-                    <nui-button variant="primary" data-action="render-all">
+                    <nui-button variant="primary" data-action="render-all" id="btn-render-wrap">
                         <button type="button" id="btn-render">Render All</button>
+                    </nui-button>
+                    <nui-button variant="danger" data-action="render-stop" id="btn-stop-wrap" hidden>
+                        <button type="button" id="btn-stop">Stop</button>
                     </nui-button>
                 </div>
                 <div id="render-status" class="render-status-row">

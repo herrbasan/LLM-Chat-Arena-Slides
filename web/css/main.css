@@ -490,7 +490,6 @@ nui-dialog[mode="page"] .options-source {
 /* ─── Word Highlighting (Playback) ─────────────────────────── */
 
 .words-container {
-    font-size: 22px;
     line-height: 1.7;
     word-spacing: 0.15em;
     margin: 0 0 var(--nui-space) 0;
@@ -501,9 +500,10 @@ nui-dialog[mode="page"] .options-source {
 }
 
 .words-container .word {
+    font-size: 1.5rem;
+    font-weight: 300;
     display: inline;
     transition: opacity 0.08s;
-    padding: 1px 2px;
     opacity: 0.4;
 }
 
@@ -516,7 +516,7 @@ nui-dialog[mode="page"] .options-source {
 }
 
 .words-container .word.future {
-    opacity: 0.4;
+    opacity: 0.3;
 }
 
 /* Topic slide: future words stay fully readable because the words
@@ -536,6 +536,7 @@ nui-dialog[mode="page"] .options-source {
     display: block;
     height: 0;
     margin: 0;
+    margin-bottom: var(--nui-space);
 }
 
 /* v3 paragraph word container — inline wrapper per paragraph */
@@ -802,6 +803,11 @@ nui-dialog[mode="page"] .options-source {
 .render-status-card h3 {
     margin: 0;
     font-size: var(--font-size-medium);
+}
+
+#btn-stop-wrap[hidden],
+#btn-render-wrap[hidden] {
+    display: none;
 }
 
 .render-status-row {
