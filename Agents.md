@@ -10,6 +10,38 @@
 - **Collaborative Development:** The human user is a partner, not just a reviewer. When facing architectural decisions, trade-offs, or uncertain paths, pause and ask for input. Explain the options clearly. The user's domain knowledge and preferences are valuable — include them in the loop. Avoid long silent stretches of trial-and-error; converse, don't just execute.
 - **Use Provided Tools:** Always use the built-in VS Code read/write tools to apply changes directly when asked. Do NOT use terminal commands, shell commands, or scripts to edit files, as these bypass VS Code's file tracking, history, and diff views, making it impossible for the human partner to follow along. Do not output giant code blocks in text for the user to copy-paste.
 
+## Verified Project State — 2026-06-13
+
+### Architecture
+- **Deck version:** 3 (`deck.version === 3`). v3 projects store `messages[]` with `paragraphs[]`; virtual slides are built at runtime in `web/js/pages/render.js` (~600 chars per visual chunk).
+- **Slide type contract:** `setup → details → topic → [conversation...] → end`. The type `title` was renamed to `topic` on 2026-06-10; no `title` type remains in the active flow.
+- **Topic is the seed:** `messages[0]` from Arena exports (speaker `moderator`, content prefixed `Topic:`) is the human-authored seed prompt. It is spoken verbatim with the `Topic:` prefix on the `topic` slide. `arenaData.topic` / `summary.title` are AI-generated downstream summaries and must NOT be used as the topic.
+
+### Runtime / Storage
+- **Server:** `server/server.js` at `http://localhost:3600`.
+- **Audio binaries:** Stored directly on disk under `server/data/render_cache/{projectId}/`. nDB file buckets (`storeFile`/`getFile`) exist but are **not used** for audio.
+- **nDB:** Used for append-style JSONL project persistence only.
+- **nSpeech / nVoice:** External services via `NSPEECH_URL` and `NVOICE_URL`.
+
+### Recent Features (committed and pushed)
+- **Stop Render All:** Server-side `AbortController` per project, client Stop button in `web/pages/render.html` + `web/js/pages/render.js`, endpoint `POST /api/v3/render-stop/:id`. Commit `a87c0e1`.
+- **Projects list persistence:** `nui-list` initial render deferred until viewport has real height; `checkHeight()` rejects zero-height measurements. App-side fingerprint guard in `web/js/pages/projects.js` skips `updateData()` when data is unchanged. Commits: NUI submodule `80ac441`, main repo `4f29f82`.
+
+### NUI Submodule Patches
+- `modules/nui_wc2` carries two local patches on top of upstream `main`:
+  - `6f388a1` — don't clobber `itemHeight` while hidden (`list.stop` guard).
+  - `80ac441` — never accept zero `itemHeight`; defer initial render until layout.
+
+### Visual Styling (current)
+- **Conversation slides:** no eyebrow label (`showEyebrow: false` in `SLIDE_STYLES`).
+- **New-speaker transition:** `.slide--new-speaker` has no default treatment (no top border).
+- **Word highlighting:** opacity-only (`future 0.4`, `active 1`, `past 0.8`; topic future words at `1`).
+
+### Pitfalls to remember
+- The NUI router caches pages and initially appends them `display:none`. Any component that measures geometry must wait for visibility.
+- If playback/alignment looks wrong, clear `server/data/render_cache/{projectId}/` and remove persisted `slide.tts` data through the API; mixed cache is a common false lead.
+- Restart the slideshow server after changing `.env`, `ALIGNMENT_VERSION`, or imported server modules. Restart nVoice after changing Python files in `D:\Work\_GIT\nVoice`.
+
 ## Current Slideshow System
 
 ### Runtime Services

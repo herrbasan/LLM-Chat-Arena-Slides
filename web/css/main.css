@@ -581,20 +581,8 @@ nui-dialog[mode="page"] .options-source {
 
 /* New-speaker transition. The renderer adds this class to a slide
  * whose speaker differs from the previous slide. The hook is here for
- * any visual treatment you want — top accent bar, brief banner, etc. */
-.slide--new-speaker {
-    position: relative;
-}
-.slide--new-speaker::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background: var(--color-highlight);
-    opacity: 0.6;
-}
+ * any visual treatment you want — currently no default treatment. */
+.slide--new-speaker { }
 
 /* Split-chunk hooks. Conversation slides that are part of a multi-chunk
  * split of a single source message get one of these. */

@@ -458,7 +458,7 @@ nui.registerPage('render', {
                 accentBackground: true
             },
             conversation: {
-                showEyebrow: true,
+                showEyebrow: false,
                 showSpeaker: true,
                 showHeader: true,
                 layout: 'flow',
