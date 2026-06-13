@@ -64,6 +64,12 @@ nui.registerPage('projects', {
             if (listState) listState.hidden = !hasProjects;
         }
 
+        let lastProjectsFingerprint = '';
+
+        function fingerprintProjects(projects) {
+            return projects.map(p => `${p._id}:${p.updatedAt || p.createdAt || 0}`).join('|');
+        }
+
         async function loadProjects() {
             try {
                 const res = await fetch('/api/projects');
@@ -73,6 +79,15 @@ nui.registerPage('projects', {
                 setState(projects.length > 0);
 
                 if (projects.length === 0 || !list) return;
+
+                const fingerprint = fingerprintProjects(projects);
+                if (fingerprint === lastProjectsFingerprint && list.data) {
+                    // Data unchanged since last visit; don't clear/rebuild the list.
+                    // Just make sure the list wrapper is visible.
+                    setState(true);
+                    return;
+                }
+                lastProjectsFingerprint = fingerprint;
 
                 const items = projects.map((p, idx) => {
                     const isV3 = p.version === 3;
