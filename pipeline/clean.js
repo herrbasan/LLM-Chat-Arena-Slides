@@ -15,9 +15,15 @@ const fs = require('fs');
 const path = require('path');
 
 // ─── Config ───────────────────────────────────────────────────
-
-const GATEWAY_URL = process.env.LLM_GATEWAY_URL || 'http://192.168.0.100:3400';
-const MODEL = 'badkid-llama-chat';
+//
+// gatewayChat() reads from env at import time for backwards compat
+// (the CLI main() and any other caller that doesn't pass settings).
+// When called from the server, cleanMessage/cleanAllMessages accept
+// an optional `settings` object: { llmGatewayUrl, llmGatewayApiKey,
+// cleanupModel } — overrides take precedence so the app config
+// dialog can change the URL/model without restarting the server.
+const DEFAULT_GATEWAY_URL = process.env.LLM_GATEWAY_URL || 'http://192.168.0.100:3400';
+const DEFAULT_MODEL = 'badkid-llama-chat';
 
 // Bump this when the prompt changes. Old cached outputs with a
 // different version are ignored and re-generated.
@@ -73,10 +79,17 @@ Output ONLY the cleaned text. No preamble, no explanation, no markdown fences.`;
 // 2026-06-13 — user feedback: cleanup "instantly finishes".)
 
 // ─── Gateway call ─────────────────────────────────────────────
+//
+// settings: { llmGatewayUrl?, llmGatewayApiKey?, cleanupModel? }.
+// All fields are optional and fall back to env / hardcoded defaults
+// if not provided. Pass a settings object when calling from code
+// paths that have access to runtime app settings (the server).
+async function gatewayChat(userMessage, settings = {}) {
+    const gatewayUrl = settings.llmGatewayUrl || DEFAULT_GATEWAY_URL;
+    const model = settings.cleanupModel || DEFAULT_MODEL;
 
-async function gatewayChat(userMessage) {
     const body = {
-        model: MODEL,
+        model,
         messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: userMessage }
@@ -86,9 +99,14 @@ async function gatewayChat(userMessage) {
         extraBody: { chat_template_kwargs: { enable_thinking: false } }
     };
 
-    const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
+    const headers = { 'Content-Type': 'application/json' };
+    if (settings.llmGatewayApiKey) {
+        headers['Authorization'] = `Bearer ${settings.llmGatewayApiKey}`;
+    }
+
+    const res = await fetch(`${gatewayUrl}/v1/chat/completions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(body)
     });
 
@@ -111,27 +129,29 @@ async function gatewayChat(userMessage) {
  * Clean a single message's text for TTS narration.
  *
  * @param {string} text — raw message content
- * @param {string} speaker — the speaker name (for cache key)
+ * @param {string} speaker — the speaker name (for cache key, currently unused)
+ * @param {Object} [settings] — runtime overrides: { llmGatewayUrl, llmGatewayApiKey, cleanupModel }
  * @returns {Promise<string>} cleaned text
  */
-async function cleanMessage(text, speaker = 'unknown') {
+async function cleanMessage(text, speaker = 'unknown', settings = {}) {
     if (!text) return '';
-    return await gatewayChat(text);
+    return await gatewayChat(text, settings);
 }
 
 /**
  * Clean all messages in a source object. Mutates messages in place.
  *
  * @param {Object[]} messages — array of { speaker, content } objects
- * @param {Function} [onProgress] — (index, total, speaker) => void
+ * @param {Function} [onProgress] — (i, total, speaker) => void
+ * @param {Object} [settings] — runtime overrides: { llmGatewayUrl, llmGatewayApiKey, cleanupModel }
  * @returns {Promise<Object[]>} the same messages array with cleaned content
  */
-async function cleanAllMessages(messages, onProgress) {
+async function cleanAllMessages(messages, onProgress, settings = {}) {
     let cleaned = 0;
 
     for (let i = 0; i < messages.length; i++) {
         const m = messages[i];
-        m.content = await gatewayChat(m.content);
+        m.content = await gatewayChat(m.content, settings);
         cleaned++;
 
         if (onProgress) {
@@ -166,7 +186,7 @@ async function main() {
         process.exit(0);
     }
 
-    console.log(`[Clean] Cleaning ${messages.length} messages via ${MODEL}...`);
+    console.log(`[Clean] Cleaning ${messages.length} messages via ${DEFAULT_MODEL}...`);
     await cleanAllMessages(messages, (i, total, speaker, cleaned, cached) => {
         const status = cached > 0 ? ` (${cleaned} new, ${cached} cached)` : '';
         console.log(`  ${i}/${total}: ${speaker}${status}`);

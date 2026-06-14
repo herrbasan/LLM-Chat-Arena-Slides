@@ -119,8 +119,151 @@ document.addEventListener('click', (e) => {
             document.documentElement.style.colorScheme = next;
             break;
         }
+        case 'open-app-settings': {
+            openAppSettingsDialog();
+            break;
+        }
     }
 });
+
+// ─── App Settings Dialog ───────────────────────────────────────
+//
+// The gear button in the header opens a modal where the user can set
+// the LLM gateway URL/model, the nSpeech URL, and the nVoice URL. All
+// settings are stored server-side in nDB under '__app_settings__'.
+// Changes apply live on the next server call — no restart needed.
+//
+// The model <select> is populated from GET /api/models (a proxy to
+// the gateway's /v1/models). On gateway failure the <select> falls
+// back to a free-text input so the user can still type a name.
+async function openAppSettingsDialog() {
+    await nui.ready();
+
+    // Fetch current settings (with API key, for editing) and model list
+    // in parallel.
+    const [settingsRes, modelsRes] = await Promise.all([
+        fetch('/api/settings?includeSecrets=1'),
+        fetch('/api/models').catch(() => ({ ok: false, json: async () => ({ models: [] }) }))
+    ]);
+    const settings = settingsRes.ok ? await settingsRes.json() : {};
+    const modelsData = modelsRes.ok ? await modelsRes.json() : { models: [] };
+    const models = Array.isArray(modelsData.models) ? modelsData.models : [];
+    const modelListFailed = models.length === 0;
+
+    const formHtml = `
+        <div class="settings-dialog">
+            <div class="settings-section">
+                <h3>LLM Gateway</h3>
+                <p class="settings-hint">Used for the "Clean text with AI" step and the editor chat.</p>
+                <nui-input-group>
+                    <label for="cfg-llm-url">Gateway URL</label>
+                    <nui-input>
+                        <input type="text" id="cfg-llm-url" placeholder="http://192.168.0.100:3400" value="${escapeAttr(settings.llmGatewayUrl || '')}">
+                    </nui-input>
+                </nui-input-group>
+                <nui-input-group>
+                    <label for="cfg-llm-key">API key (optional)</label>
+                    <nui-input>
+                        <input type="password" id="cfg-llm-key" placeholder="Leave empty if gateway is open" value="${escapeAttr(settings.llmGatewayApiKey || '')}" autocomplete="off">
+                    </nui-input>
+                </nui-input-group>
+                <nui-input-group>
+                    <label for="cfg-cleanup-model">Cleanup model</label>
+                    ${modelListFailed ? `
+                        <nui-input>
+                            <input type="text" id="cfg-cleanup-model" placeholder="badkid-llama-chat" value="${escapeAttr(settings.cleanupModel || '')}">
+                        </nui-input>
+                        <p class="settings-hint">Couldn't reach the gateway's /v1/models — type the model name.</p>
+                    ` : `
+                        <nui-select searchable id="cfg-cleanup-model">
+                            <select>
+                                <option value="">Select model...</option>
+                                ${models.map(m => `<option value="${escapeAttr(m)}" ${m === settings.cleanupModel ? 'selected' : ''}>${escapeAttr(m)}</option>`).join('')}
+                            </select>
+                        </nui-select>
+                    `}
+                </nui-input-group>
+            </div>
+            <div class="settings-section">
+                <h3>nSpeech (TTS)</h3>
+                <nui-input-group>
+                    <label for="cfg-nspeech-url">URL</label>
+                    <nui-input>
+                        <input type="text" id="cfg-nspeech-url" placeholder="http://192.168.0.100:3500" value="${escapeAttr(settings.nspeechUrl || '')}">
+                    </nui-input>
+                </nui-input-group>
+            </div>
+            <div class="settings-section">
+                <h3>nVoice (alignment)</h3>
+                <nui-input-group>
+                    <label for="cfg-nvoice-url">URL</label>
+                    <nui-input>
+                        <input type="text" id="cfg-nvoice-url" placeholder="https://127.0.0.1:2244" value="${escapeAttr(settings.nvoiceUrl || '')}">
+                    </nui-input>
+                </nui-input-group>
+            </div>
+        </div>
+    `;
+
+    const { result } = nui.components.dialog.page(
+        'App settings',
+        formHtml,
+        {
+            buttons: [
+                { label: 'Cancel', value: 'cancel', type: 'outline' },
+                { label: 'Save', value: 'save', type: 'primary' }
+            ]
+        }
+    );
+
+    const button = await result;
+    if (button !== 'save') return;
+
+    // Read the form values. For the model field, support both <select>
+    // and free-text input (depending on whether /api/models succeeded).
+    const modelEl = document.querySelector('#cfg-cleanup-model') ||
+        (document.querySelector('#cfg-cleanup-model select'));
+    const modelValue = modelEl ? (modelEl.value || '').trim() : '';
+
+    const patch = {
+        llmGatewayUrl: (document.querySelector('#cfg-llm-url')?.value || '').trim(),
+        llmGatewayApiKey: (document.querySelector('#cfg-llm-key')?.value || '').trim(),
+        cleanupModel: modelValue,
+        nspeechUrl: (document.querySelector('#cfg-nspeech-url')?.value || '').trim(),
+        nvoiceUrl: (document.querySelector('#cfg-nvoice-url')?.value || '').trim()
+    };
+
+    try {
+        const res = await fetch('/api/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(patch)
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${res.status}`);
+        }
+        nui.components.banner.show({
+            content: 'Settings saved. New URLs and model will apply on the next request.',
+            priority: 'success',
+            autoClose: 3000
+        });
+    } catch (err) {
+        nui.components.banner.show({
+            content: `Settings save failed: ${err.message}`,
+            priority: 'alert',
+            autoClose: 5000
+        });
+    }
+}
+
+function escapeAttr(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
 
 // Router setup. We no longer have a sidebar, so no `navigation` option
 // is provided. The stepper is updated by the nui-route-change listener

@@ -364,6 +364,38 @@ nui-dialog[mode="page"] .options-source {
     font-size: var(--font-size-small);
     color: var(--text-color-dim);
 }
+
+/* ─── App settings dialog (gear icon in header) ─── */
+.settings-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nui-space);
+    min-width: 32rem;
+}
+.settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nui-space-half);
+}
+.settings-section h3 {
+    margin: 0 0 4px 0;
+    font-size: 1rem;
+    color: var(--color-highlight);
+}
+.settings-hint {
+    margin: 0 0 var(--nui-space-half) 0;
+    color: var(--text-color-dim);
+    font-size: var(--font-size-xsmall);
+}
+.settings-section nui-input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.settings-section nui-input-group label {
+    font-size: var(--font-size-small);
+    color: var(--text-color-dim);
+}
 .editor-summary-row {
     display: flex;
     justify-content: space-between;
@@ -797,12 +829,12 @@ nui-dialog[mode="page"] .options-source {
     flex-direction: column;
     align-items: center;
     overflow: hidden;
+    padding: 3rem;
 }
 
 #player-slide-content {
     max-width: 900px;
     width: 100%;
-    padding: var(--nui-space-double);
     overflow-y: auto;
     flex: 1;
 }
@@ -856,6 +888,41 @@ nui-icon.icon-flip-horizontal {
 
 #btn-speed {
     font-size: var(--font-size-small);
+}
+
+/* Spacer in the controls row: pushes the Record button to the right. */
+.render-controls__spacer {
+    flex: 1;
+}
+
+/* ─── Recording / Presentation Mode ─── */
+/*
+ * Toggled by adding .render-recording to <body>. Hides the app
+ * header, the sidebar (slide list + status), the progress bar,
+ * and the controls row so only the slide content is visible. Pair
+ * with the Fullscreen API to give the recorder/presenter a clean
+ * fullscreen view. Exit by pressing Esc (the browser's normal
+ * fullscreen exit also clears this class).
+ */
+body.render-recording nui-app-header,
+body.render-recording .render-sidebar,
+body.render-recording #playback-progress-bar,
+body.render-recording .render-controls {
+    display: none;
+}
+body.render-recording .page-render {
+    padding: 0;
+    height: 100vh;
+}
+body.render-recording .render-layout {
+    grid-template-columns: 1fr;
+    height: 100vh;
+}
+body.render-recording .render-player {
+    height: 100vh;
+}
+body.render-recording #player-slide-content {
+    max-width: 1200px;
 }
 
 .render-status-row {
@@ -1018,6 +1085,21 @@ nui-icon.icon-flip-horizontal {
     color: var(--text-color);
     font-weight: 500;
     text-transform: capitalize;
+}
+
+/* Section label that appears above the opening and closing groups in
+ * the sidebar (e.g. "Opening", "Closing"). Small uppercase text,
+ * dimmed, with breathing room above. */
+.render-slide-section__label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-color-dim);
+    padding: var(--nui-space-half) var(--nui-space-half) 4px var(--nui-space-half);
+    margin-top: var(--nui-space);
+}
+.render-slide-section__label:first-child {
+    margin-top: 0;
 }
 
 /* Sub-slide row: indented, dimmer by default, brighter when selected. */

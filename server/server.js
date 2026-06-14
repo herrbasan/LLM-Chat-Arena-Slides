@@ -41,7 +41,10 @@ app.use((req, res, next) => {
 });
 
 // Explicit Configuration Validation
-const requiredEnvVars = ['PORT', 'LLM_GATEWAY_URL', 'NSPEECH_URL', 'NVOICE_URL', 'NDB_DATA_PATH'];
+// Only PORT and NDB_DATA_PATH are required at boot. The URL settings
+// (LLM_GATEWAY_URL, NSPEECH_URL, NVOICE_URL) can be supplied via env
+// OR set at runtime via the app config dialog (see getSettings()).
+const requiredEnvVars = ['PORT', 'NDB_DATA_PATH'];
 for (const envVar of requiredEnvVars) {
     if (!process.env[envVar]) {
         console.error(`[FATAL] Missing required environment variable: ${envVar}`);
@@ -60,6 +63,84 @@ if (!fs.existsSync(dbPath)) {
 let db;
 if (nDB) {
     db = nDB.Database.open(path.join(dbPath, 'slideshows.jsonl'), { persistence: 'immediate' });
+}
+
+// ─── Application Settings (runtime, persisted in nDB) ─────────
+//
+// URL/model settings are stored in nDB as a single record. The record
+// is found at startup by scanning for _type === 'app_settings' (a
+// field nDB itself never sets, so the marker is unambiguous). Its
+// auto-generated _id is cached in settingsId for subsequent updates.
+//
+// The user edits these from the config dialog (gear icon in the
+// header). Changes apply live on the next server call — no restart.
+// Stored values fall back to env defaults when empty.
+
+const SETTINGS_TYPE = 'app_settings';
+let settingsId = null;     // nDB record id of the settings row
+let settingsCache = {};    // process-memory mirror
+
+// On startup, find the existing settings record (if any) and cache
+// its id + contents in memory.
+(function loadSettings() {
+    if (!db) return;
+    try {
+        const all = db.iter();
+        for (const doc of all) {
+            if (doc && doc._type === SETTINGS_TYPE) {
+                settingsId = doc._id;
+                settingsCache = doc;
+                return;
+            }
+        }
+    } catch (err) {
+        // iter() on a fresh or empty store may throw — treat as no
+        // settings saved yet. Env defaults will be used.
+    }
+})();
+
+function loadStoredSettings() {
+    return { ...settingsCache };
+}
+
+function saveStoredSettings(partial) {
+    if (!db) throw new Error('Database not available');
+    const merged = { ...settingsCache, ...partial, updatedAt: Date.now() };
+    merged._type = SETTINGS_TYPE; // marker so we can find this record on startup
+    if (settingsId) {
+        // Existing record — update in place.
+        db.update(settingsId, merged);
+    } else {
+        // First write — create via the public API. nDB generates the id.
+        settingsId = db.insert(merged);
+        // insert() may strip our _type; the id is what we need.
+    }
+    settingsCache = merged;
+    return settingsCache;
+}
+
+function getSettings() {
+    const stored = loadStoredSettings();
+    return {
+        // LLM gateway (cleanup + chat)
+        llmGatewayUrl: stored.llmGatewayUrl || process.env.LLM_GATEWAY_URL,
+        llmGatewayApiKey: stored.llmGatewayApiKey || process.env.LLM_GATEWAY_API_KEY || '',
+        cleanupModel: stored.cleanupModel || process.env.CLEANUP_MODEL || 'badkid-llama-chat',
+        // nSpeech (TTS)
+        nspeechUrl: stored.nspeechUrl || process.env.NSPEECH_URL,
+        // nVoice (alignment)
+        nvoiceUrl: stored.nvoiceUrl || process.env.NVOICE_URL
+    };
+}
+
+// Public settings shape (excludes secrets from /api/settings GET by
+// default; explicit fetch with ?includeSecrets=true to read the API key).
+function getPublicSettings(includeSecrets = false) {
+    const s = getSettings();
+    if (!includeSecrets) {
+        return { ...s, llmGatewayApiKey: s.llmGatewayApiKey ? '***' : '' };
+    }
+    return s;
 }
 
 // ─── Render Cache ───────────────────────────────────────────
@@ -132,7 +213,7 @@ async function renderParagraph(project, msgIdx, paraIdx, cacheDir, nVoiceAvailab
 
     // Generate TTS
     console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: generating TTS...`);
-    const ttsUrl = `${process.env.NSPEECH_URL}/tts?` + new URLSearchParams({
+    const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
         text: para.text,
         voice_name: voiceConfig.voice,
         speed: (voiceConfig.speed || 1.0).toString(),
@@ -241,17 +322,21 @@ function setSlideCacheMeta(projectId, meta) {
     fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
 }
 
-// Serve Client Config dynamically to avoid hardcoding frontend
+// Serve Client Config dynamically. Reads from getSettings() so URL
+// changes saved via the config dialog are reflected on the next page
+// load (the config script is fetched on every page load).
 app.get('/js/config.js', (req, res) => {
     res.setHeader('Content-Type', 'application/javascript');
+    res.setHeader('Cache-Control', 'no-store, must-revalidate');
+    const settings = getSettings();
     const configScript = `
 // ============================================
 // Dynamically Generated Slideshow Configuration
 // ============================================
 window.SLIDESHOW_CONFIG = {
-    GATEWAY_URL: ${JSON.stringify(process.env.LLM_GATEWAY_URL)},
-    NSPEECH_URL: ${JSON.stringify(process.env.NSPEECH_URL)},
-    NVOICE_URL: ${JSON.stringify(process.env.NVOICE_URL)},
+    GATEWAY_URL: ${JSON.stringify(settings.llmGatewayUrl)},
+    NSPEECH_URL: ${JSON.stringify(settings.nspeechUrl)},
+    NVOICE_URL: ${JSON.stringify(settings.nvoiceUrl)},
     DEFAULT_NARRATOR_VOICE: 'en-US-Male',
     DEFAULT_NARRATOR_SPEED: 0.95
 };
@@ -363,13 +448,90 @@ app.get('/api/projects/:id', (req, res) => {
 
 app.get('/api/voices', async (req, res) => {
     try {
-        const response = await fetch(`${process.env.NSPEECH_URL}/voices`);
+        const response = await fetch(`${getSettings().nspeechUrl}/voices`);
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const data = await response.json();
         res.json(data);
     } catch (err) {
         console.error('[Server] Failed to fetch voices from nSpeech:', err);
         res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── App Settings (config dialog) ──────────────────────────────
+//
+// GET  /api/settings                  → public settings (API key redacted)
+// GET  /api/settings?includeSecrets=1 → full settings including API key
+// PUT  /api/settings                  → merge partial settings; returns the
+//                                       stored record. Empty strings clear
+//                                       the stored value (env default takes
+//                                       over on next read).
+app.get('/api/settings', (req, res) => {
+    if (!db) return res.status(500).json({ error: 'Database not initialized' });
+    const includeSecrets = req.query.includeSecrets === '1' || req.query.includeSecrets === 'true';
+    res.json(getPublicSettings(includeSecrets));
+});
+
+app.put('/api/settings', (req, res) => {
+    if (!db) return res.status(500).json({ error: 'Database not initialized' });
+    const body = req.body || {};
+    // Only allow known keys; ignore anything else to avoid surprises.
+    const allowed = ['llmGatewayUrl', 'llmGatewayApiKey', 'cleanupModel', 'nspeechUrl', 'nvoiceUrl'];
+    const patch = {};
+    for (const key of allowed) {
+        if (key in body) {
+            // Empty string is a valid value: clears the stored override
+            // so the env default takes over. (We don't distinguish
+            // "never set" from "cleared" — both fall through to env.)
+            patch[key] = typeof body[key] === 'string' ? body[key].trim() : body[key];
+        }
+    }
+    if (Object.keys(patch).length === 0) {
+        return res.status(400).json({ error: 'No recognized settings fields in body' });
+    }
+    const stored = saveStoredSettings(patch);
+    // Return the public view (API key redacted unless explicitly asked).
+    const isApiKeyPatch = 'llmGatewayApiKey' in patch;
+    res.json(getPublicSettings(isApiKeyPatch));
+});
+
+// GET /api/models — proxy to the LLM gateway's /v1/models.
+// Used by the config dialog to populate the cleanup model <select>.
+// Returns { models: [{ id, ... }, ...] } or { models: [], error } on
+// gateway failure (so the dialog can fall back to a free-text input).
+app.get('/api/models', async (req, res) => {
+    const settings = getSettings();
+    if (!settings.llmGatewayUrl) {
+        return res.json({ models: [], error: 'LLM gateway URL not configured' });
+    }
+    try {
+        const response = await fetch(`${settings.llmGatewayUrl.replace(/\/+$/, '')}/v1/models`, {
+            signal: AbortSignal.timeout(5000),
+            agent: tlsAgent,
+            headers: settings.llmGatewayApiKey
+                ? { 'Authorization': `Bearer ${settings.llmGatewayApiKey}` }
+                : {}
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        // Normalize to a flat list of model ids; different gateways
+        // return different shapes (some nest under .data, some return
+        // an array, some return an object with a .models field).
+        let models = [];
+        if (Array.isArray(data)) {
+            models = data.map(m => (typeof m === 'string' ? m : m.id)).filter(Boolean);
+        } else if (Array.isArray(data.data)) {
+            models = data.data.map(m => m.id).filter(Boolean);
+        } else if (Array.isArray(data.models)) {
+            models = data.models.map(m => (typeof m === 'string' ? m : m.id)).filter(Boolean);
+        } else if (typeof data === 'object' && data !== null) {
+            // Some gateways return a top-level object of { id: meta }.
+            models = Object.keys(data);
+        }
+        res.json({ models });
+    } catch (err) {
+        console.warn('[Server] /api/models fetch failed:', err.message);
+        res.json({ models: [], error: err.message });
     }
 });
 
@@ -483,7 +645,7 @@ app.post('/api/v3/generate-deck', async (req, res) => {
     if (!useSSE) {
         try {
             console.log(`[Server] v3 Generate: ${arenaData.messages.length} messages`);
-            const project = await buildProject(arenaData, null, null, { skipClean: false });
+            const project = await buildProject(arenaData, null, null, { skipClean: false, settings: getSettings() });
             res.json(project);
         } catch (err) {
             console.error('[Server] v3 Generate failed:', err.message);
@@ -516,7 +678,7 @@ app.post('/api/v3/generate-deck', async (req, res) => {
         console.log(`[Server] v3 Generate (SSE): ${arenaData.messages.length} messages`);
         const project = await buildProject(arenaData, null, (stage, message, pct) => {
             send('progress', { stage, message, pct });
-        }, { skipClean: false });
+        }, { skipClean: false, settings: getSettings() });
         const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
         send('done', { messageCount: project.messages.length, paragraphCount: totalParagraphs });
         send('result', project);
@@ -565,9 +727,10 @@ app.post('/api/v3/import-raw', async (req, res) => {
 // verbatim so the existing GatewayClient SSE parser works without
 // any changes to its event semantics.
 app.post('/api/chat', async (req, res) => {
-    const gatewayUrl = process.env.LLM_GATEWAY_URL;
+    const settings = getSettings();
+    const gatewayUrl = settings.llmGatewayUrl;
     if (!gatewayUrl) {
-        res.status(500).json({ error: 'LLM_GATEWAY_URL is not configured' });
+        res.status(500).json({ error: 'LLM gateway URL is not configured (set it in the app settings or LLM_GATEWAY_URL env var)' });
         return;
     }
 
@@ -578,8 +741,8 @@ app.post('/api/chat', async (req, res) => {
     const url = `${gatewayUrl.replace(/\/+$/, '')}/v1/chat/completions`;
 
     const headers = { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' };
-    if (process.env.LLM_GATEWAY_API_KEY) {
-        headers['Authorization'] = `Bearer ${process.env.LLM_GATEWAY_API_KEY}`;
+    if (settings.llmGatewayApiKey) {
+        headers['Authorization'] = `Bearer ${settings.llmGatewayApiKey}`;
     }
 
     // Initial-connect timeout only. Once we're streaming, the
@@ -717,7 +880,7 @@ app.post('/api/render-deck/:id', async (req, res) => {
 
             // Cache miss — generate TTS
             console.log(`[Render] Slide ${i}: cache miss, generating TTS...`);
-            const ttsUrl = `${process.env.NSPEECH_URL}/tts?` + new URLSearchParams({
+            const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
                 text: text,
                 voice_name: voiceConfig.voice,
                 speed: voiceConfig.speed.toString(),
@@ -765,13 +928,12 @@ app.post('/api/render-deck/:id', async (req, res) => {
         // Quick nVoice health check before attempting alignment
         let nVoiceAvailable = false;
         try {
-            const nvRes = await fetch(process.env.NVOICE_URL, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
+            const nvRes = await fetch(getSettings().nvoiceUrl, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
             nVoiceAvailable = nvRes.ok;
         } catch { /* nVoice not available */ }
 
         if (nVoiceAvailable) {
             console.log(`[Render] ${reRendered} generated, ${cached} cached. Running alignment...`);
-            let alignAttempted = 0;
             // Align all slides that have audio but no word timing data
             for (let i = 0; i < deck.slides.length; i++) {
                 const slide = deck.slides[i];
@@ -863,13 +1025,12 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         // Check nVoice availability once up front.
         let nVoiceAvailable = false;
         try {
-            const nvRes = await fetch(process.env.NVOICE_URL, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
+            const nvRes = await fetch(getSettings().nvoiceUrl, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
             nVoiceAvailable = nvRes.ok;
         } catch {}
 
         let processedCount = 0;
         let renderedCount = 0;
-        let alignSucceeded = 0;
         let stopped = false;
 
         writeRenderProgress(projectId, 'render', 'Starting render...', 0);
@@ -1012,7 +1173,7 @@ app.post('/api/v3/render-message/:id/:msgIdx', async (req, res) => {
 
         let nVoiceAvailable = false;
         try {
-            const nvRes = await fetch(process.env.NVOICE_URL, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
+            const nvRes = await fetch(getSettings().nvoiceUrl, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
             nVoiceAvailable = nvRes.ok;
         } catch {}
 
@@ -1067,7 +1228,7 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
 
         // Generate TTS
         console.log(`[v3 Render] Re-rendering msg${mi}/p${pi}...`);
-        const ttsUrl = `${process.env.NSPEECH_URL}/tts?` + new URLSearchParams({
+        const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
             text: para.text,
             voice_name: voiceConfig.voice,
             speed: (voiceConfig.speed || 1.0).toString(),
@@ -1100,7 +1261,7 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
         // Run alignment
         let nVoiceAvailable = false;
         try {
-            const nvRes = await fetch(process.env.NVOICE_URL, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
+            const nvRes = await fetch(getSettings().nvoiceUrl, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
             nVoiceAvailable = nvRes.ok;
         } catch {}
 
@@ -1196,7 +1357,7 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
         if (!audioCached) {
             // Generate TTS
             console.log(`[Render] Slide ${slideIdx}: generating TTS...`);
-            const ttsUrl = `${process.env.NSPEECH_URL}/tts?` + new URLSearchParams({
+            const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
                 text, voice_name: voiceConfig.voice, speed: voiceConfig.speed.toString(), output_format: 'mp3'
             }).toString();
 
@@ -1257,7 +1418,7 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
 
         let nVoiceAvailable = false;
         try {
-            const nvRes = await fetch(process.env.NVOICE_URL, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
+            const nvRes = await fetch(getSettings().nvoiceUrl, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
             nVoiceAvailable = nvRes.ok;
         } catch {}
 
@@ -1306,7 +1467,7 @@ async function alignSingleSlide(slide, slideIndex) {
     if (!slide.tts || !slide.tts.audioPath) return null;
 
     const audioBuffer = fs.readFileSync(slide.tts.audioPath);
-    const url = `${process.env.NVOICE_URL}/align?text=${encodeURIComponent(text)}`;
+    const url = `${getSettings().nvoiceUrl}/align?text=${encodeURIComponent(text)}`;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60000);
@@ -1391,7 +1552,7 @@ async function alignParagraph(paragraph, msgIdx, paraIdx) {
     // Strip *emphasis* markers for alignment
     const spokenText = text.replace(/\*([^*]+)\*/g, '$1');
     const audioBuffer = fs.readFileSync(paragraph.audioPath);
-    const url = `${process.env.NVOICE_URL}/align?text=${encodeURIComponent(spokenText)}`;
+    const url = `${getSettings().nvoiceUrl}/align?text=${encodeURIComponent(spokenText)}`;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60000);
@@ -1458,7 +1619,7 @@ app.post('/api/tts-preview', async (req, res) => {
         // Same rule as getSpokenText in the per-slide render path.
         const spokenText = String(text).replace(/\*+/g, '');
 
-        const ttsUrl = `${process.env.NSPEECH_URL}/tts?` + new URLSearchParams({
+        const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
             text: spokenText,
             voice_name: voice || 'en-US-Male',
             speed: (speed || 1.0).toString(),

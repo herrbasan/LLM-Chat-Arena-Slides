@@ -319,6 +319,8 @@ nui.registerPage('render', {
         const timeDisplay = element.querySelector('#time-display');
         const btnPlay = element.querySelector('#btn-play');
         const btnSpeed = element.querySelector('#btn-speed');
+        const btnRecord = element.querySelector('#btn-record');
+        const btnRecordLabel = element.querySelector('#btn-record-label');
         const renderProgress = element.querySelector('#render-progress');
         const renderProgressWrap = element.querySelector('#render-progress-wrap');
         const renderProgressText = element.querySelector('#render-progress-text');
@@ -745,41 +747,52 @@ nui.registerPage('render', {
             // Conversation slides (split chunks of a single source message)
             // are grouped under their source message. Non-conversation
             // slides (setup, details, topic, end) are top-level entries
-            // with no children.
+            // with no children. Setup/Details/Topic render at the top of
+            // the sidebar as the opening; End renders at the bottom as
+            // the closing.
             const slidesByMsg = new Map();
-            const topLevelByType = []; // setup/details/topic/end as their own top-level entries
+            const openingSlides = []; // setup, details, topic (in deck.slides order)
+            const closingSlides = []; // end (in deck.slides order)
             (deck.slides || []).forEach((slide, slideIdx) => {
                 if (slide.type !== 'conversation' && slide.type !== 'narration') {
-                    topLevelByType.push({ slideIdx, slide });
+                    if (slide.type === 'end') closingSlides.push({ slideIdx, slide });
+                    else openingSlides.push({ slideIdx, slide });
                     return;
                 }
                 const msgIdx = slide._paragraphs?.[0]?.msgIdx;
                 if (msgIdx == null) {
-                    topLevelByType.push({ slideIdx, slide });
+                    if (slide.type === 'end') closingSlides.push({ slideIdx, slide });
+                    else openingSlides.push({ slideIdx, slide });
                     return;
                 }
                 if (!slidesByMsg.has(msgIdx)) slidesByMsg.set(msgIdx, []);
                 slidesByMsg.get(msgIdx).push(slideIdx);
             });
 
-            // Build the sidebar. Top-level entries first (setup, details,
-            // topic, end) in the order they appear in deck.slides, then
-            // conversation messages in order. Conversation messages are
-            // numbered starting at 1 for display.
+            // Build the sidebar. Opening slides first (Setup, Details,
+            // Topic), then numbered conversation groups, then closing
+            // slides (End). Each section gets a small label so the
+            // structure is self-evident.
             const out = [];
-            topLevelByType.forEach(({ slideIdx, slide }) => {
+
+            const renderTopLevelRow = ({ slideIdx, slide }) => {
                 const status = computeStaleness(slide);
                 const isSelected = slideIdx === currentSlideIdx;
                 const isDimmed = status !== 'fresh' && !renderingSlides.has(slideIdx);
                 const label = slide.type.charAt(0).toUpperCase() + slide.type.slice(1);
-                out.push(`
+                return `
                     <div data-slide-idx="${slideIdx}" class="render-slide-row render-slide-row--top ${isSelected ? 'is-selected' : ''} ${isDimmed ? 'is-dimmed' : ''}" title="${escapeHtml(label)} (${statusLabel[status]})">
                         <span class="render-slide-row__dot ${status}" data-slide-idx="${slideIdx}"></span>
                         <span class="render-slide-row__label" data-slide-idx="${slideIdx}">${escapeHtml(label)}</span>
                         ${!renderingSlides.has(slideIdx) ? `<span class="render-slide-row__action"><nui-button variant="icon" data-action="render-slide:${slideIdx}" title="Render this slide"><button type="button" aria-label="Render slide ${slideIdx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button></span>` : ''}
                     </div>
-                `);
-            });
+                `;
+            };
+
+            if (openingSlides.length > 0) {
+                out.push(`<div class="render-slide-section__label">Opening</div>`);
+                openingSlides.forEach(s => out.push(renderTopLevelRow(s)));
+            }
 
             let msgCounter = 0;
             messages.forEach((msg, msgIdx) => {
@@ -816,6 +829,11 @@ nui.registerPage('render', {
                     </div>
                 `);
             });
+
+            if (closingSlides.length > 0) {
+                out.push(`<div class="render-slide-section__label">Closing</div>`);
+                closingSlides.forEach(s => out.push(renderTopLevelRow(s)));
+            }
 
             messageList.innerHTML = out.join('');
 
@@ -975,10 +993,16 @@ nui.registerPage('render', {
             }
         }
 
-        // Render a single v2 slide (no paragraph grouping). Calls the
-        // /api/render-slide endpoint, which generates the TTS audio
-        // and re-aligns words. Mirrors the v2 branch of renderAllSlides.
+        // Render a single slide.
+        //   - v3: delegate to renderVirtualSlide, which works for any
+        //     virtual slide with paragraphs (conversation, setup,
+        //     details, topic, end). The server's /api/v3/render-paragraph
+        //     resolves the right voice from the message's role.
+        //   - v2: call the v2 /api/render-slide endpoint.
         async function renderSingleSlide(slideIdx) {
+            if (isV3) {
+                return renderVirtualSlide(slideIdx);
+            }
             renderingSlides.add(slideIdx);
             renderMessageList();
             try {
@@ -1393,6 +1417,82 @@ nui.registerPage('render', {
             progressFill.style.width = Math.min(pct, 100) + '%';
         }
 
+        // ─── Recording / Presentation mode ─────────────────────
+        // Hides the app header, sidebar, progress bar, and controls
+        // row, then requests browser fullscreen on the page wrapper.
+        // Esc (or the browser's fullscreen-exit) tears the mode down
+        // and shows the controls again. Useful for screen-recording
+        // the slides or for a clean presentation view.
+        let isRecording = false;
+
+        async function enterRecordingMode() {
+            if (isRecording) return;
+            isRecording = true;
+            document.body.classList.add('render-recording');
+            updateRecordButton();
+            try {
+                // requestFullscreen on the .page-render wrapper so the
+                // background-color of the page extends into the
+                // fullscreen area (otherwise it'd be black).
+                const pageEl = element.querySelector('.page-render');
+                if (pageEl && pageEl.requestFullscreen) {
+                    await pageEl.requestFullscreen();
+                } else if (document.documentElement.requestFullscreen) {
+                    await document.documentElement.requestFullscreen();
+                }
+            } catch (err) {
+                // Fullscreen request can be denied (e.g. not from a
+                // user gesture in some browsers). Recording mode
+                // still works without it — the layout is clean.
+                console.warn('[Record] fullscreen request failed:', err.message);
+            }
+        }
+
+        async function exitRecordingMode() {
+            if (!isRecording) return;
+            isRecording = false;
+            document.body.classList.remove('render-recording');
+            updateRecordButton();
+            try {
+                if (document.fullscreenElement) {
+                    await document.exitFullscreen();
+                }
+            } catch (err) {
+                console.warn('[Record] exitFullscreen failed:', err.message);
+            }
+        }
+
+        function toggleRecordingMode() {
+            if (isRecording) exitRecordingMode();
+            else enterRecordingMode();
+        }
+
+        function updateRecordButton() {
+            if (!btnRecord || !btnRecordLabel) return;
+            btnRecordLabel.textContent = isRecording ? 'Exit' : 'Record';
+            btnRecord.setAttribute('title', isRecording
+                ? 'Exit recording mode (Esc)'
+                : 'Enter recording mode (fullscreen, no controls)');
+        }
+
+        // Sync state if the user presses Esc (or any other browser-
+        // native way of leaving fullscreen).
+        document.addEventListener('fullscreenchange', () => {
+            if (!document.fullscreenElement && isRecording) {
+                isRecording = false;
+                document.body.classList.remove('render-recording');
+                updateRecordButton();
+            }
+        });
+
+        // Also handle Esc as a fallback for browsers that don't fire
+        // fullscreenchange reliably on key-exit.
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && isRecording) {
+                exitRecordingMode();
+            }
+        });
+
         function updateTimeDisplay(currentMs, durationMs) {
             const fmt = (ms) => {
                 const s = Math.floor(ms / 1000);
@@ -1547,6 +1647,9 @@ nui.registerPage('render', {
                 playbackSpeed = speeds[(idx + 1) % speeds.length];
                 audio.playbackRate = playbackSpeed;
                 btnSpeed.querySelector('button').textContent = playbackSpeed.toFixed(playbackSpeed % 1 === 0 ? 0 : 2) + 'x';
+            }
+            if (action === 'player-record') {
+                toggleRecordingMode();
             }
         });
 

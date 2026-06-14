@@ -144,9 +144,12 @@ async function buildProject(sourceData, outputDir = null, progress = () => {}, o
     const skipClean = options.skipClean === true || options.useLLM === false;
     if (!skipClean) {
         progress('clean', `Cleaning ${source.messages.length} messages via LLM…`, 15);
+        // settings: optional runtime overrides (LLM gateway URL, model,
+        // API key). When called from the server, options.settings
+        // carries the current app settings; the CLI doesn't pass it.
         await cleanAllMessages(source.messages, (i, total, speaker, cleaned, cached) => {
             progress('clean', `Cleaning message ${i}/${total} (${speaker})`, 15 + Math.floor((i / total) * 10));
-        });
+        }, options.settings || {});
     } else {
         progress('clean', 'Skipping LLM text cleaning (--skip-clean)', 20);
     }
