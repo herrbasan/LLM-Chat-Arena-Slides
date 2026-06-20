@@ -366,13 +366,27 @@ nui.registerPage('render', {
         }
 
         function computeStaleness(slide) {
-            // v3: check paragraph render state
+            // v3: check paragraph render state against current voice config
             if (slide._paragraphs) {
                 if (slide._paragraphs.length === 0) return 'unrendered';
-                const hasAnyAudio = slide._paragraphs.some(p => p.audioUrl);
-                if (!hasAnyAudio) return 'unrendered';
-                const allAligned = slide._paragraphs.every(p => p.alignComplete && p.words?.length > 0);
-                return allAligned ? 'fresh' : 'stale';
+                const roleCfg = deck.voiceMapping[slide.speaker] || deck.voiceMapping.narrator || {};
+                let hasFresh = false;
+                let hasStale = false;
+                let hasUnrendered = false;
+                for (const para of slide._paragraphs) {
+                    if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
+                    if (!para.audioUrl && !para.renderHash) { hasUnrendered = true; continue; }
+                    const expectedHash = computeRenderHash(stripEmphasisForSpeech(para.text), roleCfg.voice, roleCfg.speed);
+                    if (para.renderHash === expectedHash && para.words?.length > 0) {
+                        hasFresh = true;
+                    } else {
+                        hasStale = true;
+                    }
+                }
+                if (hasStale) return 'stale';
+                if (hasUnrendered) return 'unrendered';
+                if (hasFresh) return 'fresh';
+                return 'unrendered';
             }
             // v2: original logic
             if (!slide.tts || slide.tts.error) return 'unrendered';
