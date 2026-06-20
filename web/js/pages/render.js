@@ -365,37 +365,7 @@ nui.registerPage('render', {
             }
         }
 
-        function computeStaleness(slide) {
-            // v3: check paragraph render state against current voice config
-            if (slide._paragraphs) {
-                if (slide._paragraphs.length === 0) return 'unrendered';
-                const roleCfg = deck.voiceMapping[slide.speaker] || deck.voiceMapping.narrator || {};
-                let hasFresh = false;
-                let hasStale = false;
-                let hasUnrendered = false;
-                for (const para of slide._paragraphs) {
-                    if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
-                    if (!para.audioUrl && !para.renderHash) { hasUnrendered = true; continue; }
-                    const expectedHash = computeRenderHash(stripEmphasisForSpeech(para.text), roleCfg.voice, roleCfg.speed);
-                    if (para.renderHash === expectedHash && para.words?.length > 0) {
-                        hasFresh = true;
-                    } else {
-                        hasStale = true;
-                    }
-                }
-                if (hasStale) return 'stale';
-                if (hasUnrendered) return 'unrendered';
-                if (hasFresh) return 'fresh';
-                return 'unrendered';
-            }
-            // v2: original logic
-            if (!slide.tts || slide.tts.error) return 'unrendered';
-            const text = getSpokenText(slide);
-            const roleCfg = deck.voiceMapping[slide.speaker] || deck.voiceMapping.narrator || {};
-            const expectedHash = computeRenderHash(text, roleCfg.voice, roleCfg.speed);
-            if (slide.tts.renderHash === expectedHash) return 'fresh';
-            return 'stale';
-        }
+
 
         function getSpokenText(slide) {
             let text;
@@ -410,6 +380,45 @@ nui.registerPage('render', {
                 text = slide.text || slide.narration || '';
             }
             return stripEmphasisForSpeech(text);
+        }
+
+        // Single source of truth for paragraph freshness.
+        // Matches the server's renderParagraph freshness check as closely
+        // as the browser can: hash from spoken text, audio present, words
+        // present. Anything with audio/hash but not fresh is stale.
+        function computeParagraphStatus(para, voiceConfig) {
+            if (!para.text || para.text.trim() === '' || para.text.trim() === '...') return 'skip';
+            const hasAudio = !!(para.audioRef || para.audioUrl);
+            const hasHash = !!para.renderHash;
+            if (!hasAudio && !hasHash) return 'unrendered';
+            const expectedHash = computeRenderHash(stripEmphasisForSpeech(para.text), voiceConfig.voice, voiceConfig.speed);
+            const isFresh = para.renderHash === expectedHash && hasAudio && (para.words?.length || 0) > 0;
+            return isFresh ? 'fresh' : 'stale';
+        }
+
+        function aggregateStatus(statuses) {
+            if (statuses.length === 0) return 'unrendered';
+            if (statuses.some(s => s === 'stale')) return 'stale';
+            if (statuses.some(s => s === 'unrendered')) return 'unrendered';
+            return 'fresh';
+        }
+
+        function computeStaleness(slide) {
+            // v3: aggregate paragraph status
+            if (slide._paragraphs) {
+                const roleCfg = deck.voiceMapping[slide.speaker] || deck.voiceMapping.narrator || {};
+                const statuses = slide._paragraphs
+                    .map(p => computeParagraphStatus(p, roleCfg))
+                    .filter(s => s !== 'skip');
+                return aggregateStatus(statuses);
+            }
+            // v2: original logic
+            if (!slide.tts || slide.tts.error) return 'unrendered';
+            const text = getSpokenText(slide);
+            const roleCfg = deck.voiceMapping[slide.speaker] || deck.voiceMapping.narrator || {};
+            const expectedHash = computeRenderHash(text, roleCfg.voice, roleCfg.speed);
+            if (slide.tts.renderHash === expectedHash) return 'fresh';
+            return 'stale';
         }
 
         // Browser-side mirror of pipeline/speak-text.js speakText().
@@ -694,34 +703,12 @@ nui.registerPage('render', {
         let renderingParagraphs = new Set();
 
         function computeMessageStaleness(msg) {
-            if (!msg) return 'unrendered'; // defensive: null holes in messages[]
+            if (!msg) return 'unrendered';
             const voiceConfig = deck.voiceMapping?.[msg.speaker || 'narrator'] || deck.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
-            const paragraphs = msg.paragraphs || [];
-            if (paragraphs.length === 0) return 'unrendered';
-
-            let hasFresh = false;
-            let hasStale = false;
-            let hasUnrendered = false;
-
-            for (const para of paragraphs) {
-                if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
-                const renderHash = computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed);
-                const isFresh = para.renderHash === renderHash
-                    && para.audioRef
-                    && para.words?.length > 0;
-                if (isFresh) {
-                    hasFresh = true;
-                } else if (para.audioRef || para.renderHash) {
-                    hasStale = true;
-                } else {
-                    hasUnrendered = true;
-                }
-            }
-
-            if (hasStale) return 'stale';
-            if (hasUnrendered) return 'unrendered';
-            if (hasFresh) return 'fresh';
-            return 'unrendered';
+            const statuses = (msg.paragraphs || [])
+                .map(p => computeParagraphStatus(p, voiceConfig))
+                .filter(s => s !== 'skip');
+            return aggregateStatus(statuses);
         }
 
         function renderMessageList() {
