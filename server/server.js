@@ -960,6 +960,7 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         renderControllers.set(projectId, controller);
 
         const targets = req.body.targets;
+        const force = req.body.force === true;
         const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
 
         // Check nVoice availability once up front.
@@ -1002,7 +1003,7 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
                 if (myIdx >= totalToRender) return;
 
                 const { msgIdx, paraIdx } = renderTargets[myIdx];
-                const result = await renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable);
+                const result = await renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, { force });
 
                 processedCount++;
                 if (result.rendered) {

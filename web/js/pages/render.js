@@ -1115,9 +1115,9 @@ nui.registerPage('render', {
             }
         }
 
-        async function renderAllSlides() {
+        async function renderAllSlides(options = {}) {
             if (isV3) {
-                return await renderAllV3();
+                return await renderAllV3(options);
             }
             // v2: original per-slide render
             const slides = deck.slides;
@@ -1169,7 +1169,8 @@ nui.registerPage('render', {
             if (btnStopWrap) btnStopWrap.hidden = !isActive;
         }
 
-        async function renderAllV3() {
+        async function renderAllV3(options = {}) {
+            const force = options.force === true;
             setRenderControls(true);
             // Mark all messages as rendering
             for (let i = 0; i < deck.messages.length; i++) renderingMessages.add(i);
@@ -1244,7 +1245,7 @@ nui.registerPage('render', {
                 const res = await fetch(`/api/v3/render-deck/${projectId}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(deck)
+                    body: JSON.stringify({ ...deck, force })
                 });
 
                 clearInterval(pollTimer);
@@ -1723,7 +1724,7 @@ nui.registerPage('render', {
             const [action, param] = actionEl.dataset.action.split(':');
 
             if (action === 'render-all') {
-                await renderAllSlides();
+                await renderAllSlides({ force: param === 'force' });
             }
 
             if (action === 'render-stop') {
