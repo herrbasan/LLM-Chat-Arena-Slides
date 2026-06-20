@@ -184,13 +184,14 @@ function readAudio(audioRef) {
     return db.getFile(m[1], m[2], m[3]);
 }
 
-// Check if an audioRef's file exists in the bucket (by attempting a
-// lightweight listFiles lookup). Used for freshness checks.
+// Check if an audioRef's file exists in the bucket and is non-empty.
+// A zero-byte file is treated as missing so paragraphs with failed/empty
+// TTS are re-rendered instead of being considered "has audio".
 function audioExists(audioRef) {
     if (!audioRef) return false;
     try {
-        readAudio(audioRef);
-        return true;
+        const buf = readAudio(audioRef);
+        return buf.length > 0;
     } catch {
         return false;
     }
@@ -229,6 +230,8 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
     const para = msg.paragraphs[paraIdx];
     const role = msg.speaker || 'narrator';
     const voiceConfig = project.voiceMapping?.[role] || project.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
+    const signal = options.signal;
+
     // Hash must be computed from the spoken text (after speakText
     // normalization) because that's what the audio actually contains.
     // Using raw para.text would mismatch for any paragraph with
@@ -237,9 +240,9 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
     const renderHash = computeRenderHash(spokenText, voiceConfig.voice, voiceConfig.speed);
 
     // Paragraph is fresh if its stored hash matches current text/voice/speed,
-    // the audio exists in the bucket, and alignment is at the current version.
-    // `force` (set by explicit per-message / per-paragraph user clicks)
-    // bypasses the freshness check — the user asked for it, do it.
+    // the audio exists in the bucket (and is non-empty), and alignment is at
+    // the current version. `force` bypasses the freshness check — the user
+    // asked for it, do it.
     const isFresh = para.renderHash === renderHash
         && para.audioRef
         && audioExists(para.audioRef)
@@ -248,6 +251,11 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
 
     if (isFresh && !options.force) {
         return { rendered: false, aligned: false };
+    }
+
+    // Abort early if the render was cancelled.
+    if (signal?.aborted) {
+        return { rendered: false, aligned: false, error: 'Render aborted' };
     }
 
     // Clear stale render data for this paragraph. Old audio will be
@@ -261,8 +269,8 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
     delete para.alignError;
     delete para.ttsError;
 
-    // Generate TTS.
-    console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: generating TTS...`);
+    // Generate TTS with retry. Empty audio and transient failures (5xx,
+    // network errors) are retried; 4xx client errors are not.
     const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
         text: spokenText,
         voice_name: voiceConfig.voice,
@@ -270,15 +278,52 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
         output_format: 'mp3'
     }).toString();
 
-    const ttsRes = await fetch(ttsUrl);
-    if (!ttsRes.ok) {
-        console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} TTS failed: HTTP ${ttsRes.status}`);
+    let audioBuffer = null;
+    let ttsError = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        if (signal?.aborted) {
+            ttsError = 'Render aborted';
+            break;
+        }
+        try {
+            console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: TTS attempt ${attempt}`);
+            const ttsRes = await fetch(ttsUrl, { signal });
+            if (!ttsRes.ok) {
+                const body = await ttsRes.text().catch(() => '');
+                console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} TTS HTTP ${ttsRes.status}: ${body.slice(0, 200)}`);
+                ttsError = `TTS HTTP ${ttsRes.status}`;
+                // Do not retry client errors (4xx).
+                if (ttsRes.status >= 400 && ttsRes.status < 500) break;
+                await sleep(500 * attempt);
+                continue;
+            }
+            const buf = Buffer.from(await ttsRes.arrayBuffer());
+            if (!buf || buf.length === 0) {
+                console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} TTS returned empty audio (attempt ${attempt})`);
+                ttsError = 'TTS returned empty audio';
+                await sleep(500 * attempt);
+                continue;
+            }
+            audioBuffer = buf;
+            break;
+        } catch (err) {
+            if (err.name === 'AbortError') {
+                ttsError = 'Render aborted';
+                break;
+            }
+            console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} TTS network error (attempt ${attempt}):`, err.message);
+            ttsError = `TTS network error: ${err.message}`;
+            await sleep(500 * attempt);
+        }
+    }
+
+    if (!audioBuffer) {
         para.renderHash = renderHash;
-        para.ttsError = `TTS HTTP ${ttsRes.status}`;
+        para.ttsError = ttsError || 'TTS failed after retries';
+        console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} ${para.ttsError}`);
         return { rendered: false, aligned: false, error: para.ttsError };
     }
 
-    const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
     const { audioRef, audioUrl, byteLength } = storeAudio(
         `msg_${msgIdx}_p_${paraIdx}_${renderHash}.mp3`, audioBuffer
     );
@@ -290,26 +335,59 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
     para.speed = voiceConfig.speed;
     para.byteLength = byteLength;
 
-    // Align immediately while the audio is fresh.
+    // Align immediately while the audio is fresh, with retry for transient
+    // failures and empty results.
     let aligned = false;
     if (nVoiceAvailable) {
-        try {
-            const alignRes = await alignParagraph(para, msgIdx, paraIdx);
-            if (alignRes) {
-                para.words = alignRes.words;
-                para.durationMs = alignRes.durationMs;
-                para.alignComplete = alignRes.alignComplete;
-                para.alignVersion = ALIGNMENT_VERSION;
-                aligned = true;
-                console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: aligned ${alignRes.words.length} words`);
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            if (signal?.aborted) {
+                para.alignError = 'Render aborted';
+                break;
             }
-        } catch (err) {
-            console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} alignment failed:`, err.message);
-            para.alignError = err.message;
+            try {
+                const alignRes = await alignParagraph(para, msgIdx, paraIdx, { signal });
+                if (alignRes) {
+                    para.words = alignRes.words;
+                    para.durationMs = alignRes.durationMs;
+                    para.alignComplete = alignRes.alignComplete;
+                    para.alignVersion = ALIGNMENT_VERSION;
+                    aligned = true;
+                    console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: aligned ${alignRes.words.length} words (attempt ${attempt})`);
+                    break;
+                }
+                // alignParagraph should throw on real failures; reaching here
+                // means preconditions weren't met (no text/audio).
+                para.alignError = 'Alignment skipped';
+                break;
+            } catch (err) {
+                if (err.name === 'AbortError') {
+                    para.alignError = 'Render aborted';
+                    break;
+                }
+                const retryable = err.message?.includes('no segments') ||
+                                  err.message?.includes('no words') ||
+                                  err.message?.includes('nVoice alignment failed') ||
+                                  err.message?.includes('timed out') ||
+                                  err.message?.includes('network');
+                para.alignError = err.message;
+                if (retryable && attempt < 3) {
+                    console.warn(`[v3 Render] msg${msgIdx}/p${paraIdx} alignment retry ${attempt + 1}: ${err.message}`);
+                    await sleep(500 * attempt);
+                    continue;
+                }
+                console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} alignment failed:`, err.message);
+                break;
+            }
         }
+    } else {
+        para.alignError = 'nVoice unavailable';
     }
 
     return { rendered: true, aligned };
+}
+
+function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
 }
 
 function computeRenderHash(text, voice, speed) {
@@ -948,19 +1026,32 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
     }
 
     try {
-        const project = req.body;
-        if (!project || !project.messages || !Array.isArray(project.messages)) {
+        // Load the project from nDB. The browser sends its view of the
+        // project, but nDB is the source of truth. We only use the request
+        // body for intent (force, targets) and voice mapping overrides.
+        const storedProject = db.get(projectId);
+        if (!storedProject) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+        if (storedProject.version !== 3) {
+            return res.status(400).json({ error: `Expected version 3, got ${storedProject.version}` });
+        }
+        if (!storedProject.messages || !Array.isArray(storedProject.messages)) {
             return res.status(400).json({ error: 'Invalid v3 project: missing messages array' });
         }
-        if (project.version !== 3) {
-            return res.status(400).json({ error: `Expected version 3, got ${project.version}` });
+
+        const project = { ...storedProject };
+        // Accept voice mapping updates from the editor, but keep nDB
+        // paragraphs/source as the authoritative payload.
+        if (req.body?.voiceMapping) {
+            project.voiceMapping = req.body.voiceMapping;
         }
 
         const controller = new AbortController();
         renderControllers.set(projectId, controller);
 
-        const targets = req.body.targets;
-        const force = req.body.force === true;
+        const targets = req.body?.targets;
+        const force = req.body?.force === true;
         const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
 
         // Check nVoice availability once up front.
@@ -1003,7 +1094,7 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
                 if (myIdx >= totalToRender) return;
 
                 const { msgIdx, paraIdx } = renderTargets[myIdx];
-                const result = await renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, { force });
+                const result = await renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, { force, signal: controller.signal });
 
                 processedCount++;
                 if (result.rendered) {
@@ -1076,13 +1167,15 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         renderControllers.delete(projectId);
 
         if (stopped) {
-            console.log(`[v3 Render] Stopped for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${processedCount} processed, ${finalWps} words/s (${totalElapsedSec.toFixed(1)}s)`);
-            writeRenderProgress(projectId, 'stopped', `Render stopped: ${renderedCount} re-rendered, ${alignSucceeded} aligned`, 0);
+            const alignFailed = renderedCount - alignSucceeded;
+            console.log(`[v3 Render] Stopped for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${alignFailed} alignment failures, ${processedCount} processed, ${finalWps} words/s (${totalElapsedSec.toFixed(1)}s)`);
+            writeRenderProgress(projectId, 'stopped', `Render stopped: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${alignFailed} alignment failures`, 0);
             return res.json({ stopped: true, project, renderedCount, alignSucceeded, processedCount });
         }
 
-        console.log(`[v3 Render] Complete for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${processedCount} processed, ${finalWps} words/s (${totalElapsedSec.toFixed(1)}s)`);
-        writeRenderProgress(projectId, 'done', `Render complete: ${renderedCount} re-rendered, ${alignSucceeded} aligned (${finalWps} words/s)`, 100);
+        const alignFailed = renderedCount - alignSucceeded;
+        console.log(`[v3 Render] Complete for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${alignFailed} alignment failures, ${processedCount} processed, ${finalWps} words/s (${totalElapsedSec.toFixed(1)}s)`);
+        writeRenderProgress(projectId, 'done', `Render complete: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${alignFailed} alignment failures (${finalWps} words/s)`, 100);
         res.json(project);
     } catch (err) {
         renderControllers.delete(projectId);
@@ -1442,18 +1535,25 @@ async function alignSingleSlide(slide, slideIndex) {
     }
 }
 
-async function alignParagraph(paragraph, msgIdx, paraIdx) {
+async function alignParagraph(paragraph, msgIdx, paraIdx, options = {}) {
     const text = paragraph.text;
     if (!text || !text.trim()) return null;
     if (!paragraph.audioRef || !audioExists(paragraph.audioRef)) return null;
 
-    // Strip *emphasis* markers for alignment
-    const spokenText = text.replace(/\*([^*]+)\*/g, '$1');
+    // Use the same spoken-text normalization as TTS so alignment is asked
+    // to match exactly what was synthesized. This must stay in sync with
+    // speakText() in pipeline/speak-text.js.
+    const spokenText = speakText(text);
     const audioBuffer = readAudio(paragraph.audioRef);
     const url = `${getSettings().nvoiceUrl}/align?text=${encodeURIComponent(spokenText)}`;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60000);
+    const signal = options.signal;
+    if (signal) {
+        const onAbort = () => controller.abort();
+        signal.addEventListener('abort', onAbort, { once: true });
+    }
 
     try {
         const response = await fetch(url, {
@@ -1466,11 +1566,15 @@ async function alignParagraph(paragraph, msgIdx, paraIdx) {
         clearTimeout(timeout);
 
         if (!response.ok) {
+            const body = await response.text().catch(() => '');
+            console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} nVoice align HTTP ${response.status}: ${body.slice(0, 200)}`);
             throw new Error(`nVoice alignment failed: HTTP ${response.status}`);
         }
 
         const data = await response.json();
-        if (!Array.isArray(data.segments) || data.segments.length === 0) return null;
+        if (!Array.isArray(data.segments) || data.segments.length === 0) {
+            throw new Error('nVoice alignment returned no segments');
+        }
 
         const rawWords = [];
         let previousWord = null;
@@ -1488,7 +1592,9 @@ async function alignParagraph(paragraph, msgIdx, paraIdx) {
                 previousWord = word;
             }
         }
-        if (rawWords.length === 0) return null;
+        if (rawWords.length === 0) {
+            throw new Error('nVoice alignment returned no words');
+        }
 
         const durationMs = rawWords[rawWords.length - 1].endMs;
         const sourceWordCount = spokenText.split(/\s+/).filter(w => w.length > 0).length;

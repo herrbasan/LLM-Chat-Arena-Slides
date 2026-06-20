@@ -396,6 +396,29 @@ nui.registerPage('render', {
             return isFresh ? 'fresh' : 'stale';
         }
 
+        // Returns a short diagnostic string for the first stale/unrendered
+        // paragraph in a list, so the UI can explain *why* a slide/message
+        // is not fresh. Empty string if everything is fresh or skipped.
+        function getParagraphStatusHint(paragraphs, voiceConfig) {
+            if (!paragraphs) return '';
+            for (const para of paragraphs) {
+                if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
+                const status = computeParagraphStatus(para, voiceConfig);
+                if (status === 'stale') {
+                    if (para.ttsError) return `TTS failed: ${para.ttsError}`;
+                    if (para.alignError) return `Alignment failed: ${para.alignError}`;
+                    if ((para.byteLength || 0) === 0 && (para.audioRef || para.audioUrl)) return 'TTS produced empty audio — retry';
+                    if ((para.words?.length || 0) === 0 && (para.audioRef || para.audioUrl)) return 'Audio rendered but not aligned — retry';
+                    return 'Text or voice changed since last render';
+                }
+                if (status === 'unrendered') {
+                    if (para.ttsError) return `TTS failed: ${para.ttsError}`;
+                    return 'Not rendered';
+                }
+            }
+            return '';
+        }
+
         function aggregateStatus(statuses) {
             if (statuses.length === 0) return 'unrendered';
             if (statuses.some(s => s === 'stale')) return 'stale';
@@ -791,8 +814,11 @@ nui.registerPage('render', {
                 const isSelected = slideIdx === currentSlideIdx;
                 const isDimmed = status !== 'fresh' && !slideRendering;
                 const label = slide.type.charAt(0).toUpperCase() + slide.type.slice(1);
+                const voiceConfig = deck.voiceMapping?.[slide.speaker || 'narrator'] || deck.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
+                const hint = getParagraphStatusHint(slide._paragraphs, voiceConfig);
+                const title = hint ? `${escapeHtml(label)} (${statusLabel[status]}) — ${escapeHtml(hint)}` : `${escapeHtml(label)} (${statusLabel[status]})`;
                 return `
-                    <div data-slide-idx="${slideIdx}" class="render-slide-row render-slide-row--top ${isSelected ? 'is-selected' : ''} ${isDimmed ? 'is-dimmed' : ''}" title="${escapeHtml(label)} (${statusLabel[status]})">
+                    <div data-slide-idx="${slideIdx}" class="render-slide-row render-slide-row--top ${isSelected ? 'is-selected' : ''} ${isDimmed ? 'is-dimmed' : ''}" title="${title}">
                         <span class="render-slide-row__dot ${status}" data-slide-idx="${slideIdx}"></span>
                         <span class="render-slide-row__label" data-slide-idx="${slideIdx}">${escapeHtml(label)}</span>
                         ${!slideRendering ? `<span class="render-slide-row__action"><nui-button variant="icon" data-action="render-slide:${slideIdx}" title="Render this slide"><button type="button" aria-label="Render slide ${slideIdx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button></span>` : ''}
@@ -815,6 +841,9 @@ nui.registerPage('render', {
                 const status = isRendering ? 'rendering' : computeMessageStaleness(msg);
                 const isDimmed = status !== 'fresh' && !isRendering;
                 const label = msg.label || msg.originalSpeaker || msg.speaker || `Message ${msgIdx + 1}`;
+                const voiceConfig = deck.voiceMapping?.[msg.speaker || 'narrator'] || deck.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
+                const hint = getParagraphStatusHint(msg.paragraphs, voiceConfig);
+                const title = hint ? `${escapeHtml(label)} (${statusLabel[status]}) — ${escapeHtml(hint)}` : `${escapeHtml(label)} (${statusLabel[status]})`;
                 const subRows = subSlides.map((sIdx, j) => {
                     const subSlide = deck.slides[sIdx];
                     // If any paragraph in this virtual slide is currently
@@ -825,8 +854,11 @@ nui.registerPage('render', {
                     const subStatus = slideRendering ? 'rendering' : computeStaleness(subSlide);
                     const subSelected = sIdx === currentSlideIdx;
                     const subDimmed = subStatus !== 'fresh' && !slideRendering;
+                    const subVoiceConfig = deck.voiceMapping?.[subSlide?.speaker || msg.speaker || 'narrator'] || deck.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
+                    const subHint = getParagraphStatusHint(subSlide?._paragraphs, subVoiceConfig);
+                    const subTitle = subHint ? `Slide ${j + 1} of ${subSlides.length} (${statusLabel[subStatus]}) — ${escapeHtml(subHint)}` : `Slide ${j + 1} of ${subSlides.length} (${statusLabel[subStatus]})`;
                     return `
-                        <div data-slide-idx="${sIdx}" class="render-slide-row render-slide-row--sub ${subSelected ? 'is-selected' : ''} ${subDimmed ? 'is-dimmed' : ''}" title="Slide ${j + 1} of ${subSlides.length} (${statusLabel[subStatus]})">
+                        <div data-slide-idx="${sIdx}" class="render-slide-row render-slide-row--sub ${subSelected ? 'is-selected' : ''} ${subDimmed ? 'is-dimmed' : ''}" title="${subTitle}">
                             <span class="render-slide-row__dot ${subStatus}" data-slide-idx="${sIdx}"></span>
                             <span class="render-slide-row__label" data-slide-idx="${sIdx}">Slide ${j + 1} of ${subSlides.length}</span>
                             ${!slideRendering ? `<span class="render-slide-row__action"><nui-button variant="icon" data-action="render-vslide:${sIdx}" title="Render this virtual slide"><button type="button" aria-label="Render slide ${sIdx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button></span>` : ''}
@@ -835,7 +867,7 @@ nui.registerPage('render', {
                 }).join('');
                 out.push(`
                     <div class="render-slide-group">
-                        <div data-msg-idx="${msgIdx}" class="render-slide-group__header ${isDimmed ? 'is-dimmed' : ''}" title="${escapeHtml(label)} (${statusLabel[status]})">
+                        <div data-msg-idx="${msgIdx}" class="render-slide-group__header ${isDimmed ? 'is-dimmed' : ''}" title="${title}">
                             <span class="render-slide-group__num">${msgCounter}.</span>
                             <span class="render-slide-row__dot ${status}" data-msg-idx="${msgIdx}"></span>
                             <span class="render-slide-group__label">${escapeHtml(label)}</span>
@@ -1805,32 +1837,34 @@ nui.registerPage('render', {
         loadSlide(0);
 
         // Router lifecycle: the page is cached (init() runs once).
-        // The router calls element.show(params) on every navigation,
-        // so we hook it to reload the project when the URL changes.
+        // The router calls element.show(params) on every navigation.
+        // Always reload the project from the server so changes made on
+        // other pages (e.g. voice mapping in the editor) are reflected.
         element.show = (newParams) => {
-            if (newParams && newParams.id && newParams.id !== projectId) {
-                projectId = newParams.id;
-                audio.pause();
-                audio.src = '';
+            const newProjectId = newParams?.id || projectId;
+            const changedProject = newProjectId !== projectId;
+            projectId = newProjectId;
+            audio.pause();
+            audio.src = '';
+            isPlaying = false;
+            renderingSlides = new Set();
+            renderingMessages = new Set();
+            if (changedProject) {
                 currentSlideIdx = 0;
                 currentParaIdx = -1;
                 v3CumulativeMs = 0;
-                isPlaying = false;
-                renderingSlides = new Set();
-                renderingMessages = new Set();
-                loadProject(projectId).then(() => {
-                    if (deck) {
-                        if (isV3) {
-                            virtualSlides = buildVirtualSlides();
-                            deck.slides = virtualSlides;
-                            renderMessageList();
-                        } else {
-                            renderSlideList();
-                        }
-                        loadSlide(0);
-                    }
-                });
             }
+            loadProject(projectId).then(() => {
+                if (!deck) return;
+                if (isV3) {
+                    virtualSlides = buildVirtualSlides();
+                    deck.slides = virtualSlides;
+                    renderMessageList();
+                } else {
+                    renderSlideList();
+                }
+                loadSlide(changedProject ? 0 : currentSlideIdx);
+            });
         };
     }
 });

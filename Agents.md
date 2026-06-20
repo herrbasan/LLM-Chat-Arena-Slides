@@ -116,7 +116,7 @@ mcp_workshop_tools.call(method="memory.store", payload={
 
 Multiple `memory.store` calls are fine — one per topic. The dreaming system deduplicates and clusters. Prefer workshop docs over the local `documentation` tool's domain files when both are available.
 
-## Verified Project State — 2026-06-13
+## Verified Project State — 2026-06-20
 
 ### Architecture
 - **Deck version:** 3 (`deck.version === 3`). v3 projects store `messages[]` with `paragraphs[]`; virtual slides are built at runtime in `web/js/pages/render.js` (~600 chars per visual chunk).
@@ -125,13 +125,26 @@ Multiple `memory.store` calls are fine — one per topic. The dreaming system de
 
 ### Runtime / Storage
 - **Server:** `server/server.js` at `http://localhost:3600`.
-- **Audio binaries:** Stored directly on disk under `server/data/render_cache/{projectId}/`. nDB file buckets (`storeFile`/`getFile`) exist but are **not used** for audio.
+- **Audio binaries:** Stored in nDB file bucket `rendered_slides` as `audioRef`/`audioUrl` on each paragraph. nDB deduplicates by SHA-256 content hash.
 - **nDB:** Used for append-style JSONL project persistence only.
-- **nSpeech / nVoice:** External services via `NSPEECH_URL` and `NVOICE_URL`.
+- **nSpeech / nVoice:** External services via `NSPEECH_URL` and `NVOICE_URL`. Current local development uses **HTTP** `http://192.168.0.100:2244` for nVoice (self-signed HTTPS stopped working with Node v24's `fetch`).
 
 ### Recent Features (committed and pushed)
 - **Stop Render All:** Server-side `AbortController` per project, client Stop button in `web/pages/render.html` + `web/js/pages/render.js`, endpoint `POST /api/v3/render-stop/:id`. Commit `a87c0e1`.
 - **Projects list persistence:** `nui-list` initial render deferred until viewport has real height; `checkHeight()` rejects zero-height measurements. App-side fingerprint guard in `web/js/pages/projects.js` skips `updateData()` when data is unchanged. Commits: NUI submodule `80ac441`, main repo `4f29f82`.
+- **Editor generation overlay, per-paragraph volume preview, direct nSpeech TTS preview:** Implemented in `web/js/pages/editor.js`.
+- **Unified render status logic:** `computeParagraphStatus()` is the single source of truth for paragraph freshness in `web/js/pages/render.js`.
+
+### v3 Render/Alignment Pipeline — Hardened 2026-06-20
+- **Empty TTS audio is rejected.** `renderParagraph()` retries TTS up to 3 times if nSpeech returns empty audio or transient failures; zero-byte files are no longer stored/aligned.
+- **`audioExists()` checks non-zero byte length.** Prevents stale empty-audio records from looking "fresh".
+- **Alignment uses `speakText()` consistently.** Same normalization as TTS.
+- **Retry for alignment.** Up to 3 attempts for "no segments" / "no words" / network errors.
+- **Abort signal propagation.** `renderParagraph()` and `alignParagraph()` accept an `AbortSignal`; Stop Render now cancels in-flight work.
+- **`/api/v3/render-deck/:id` loads from nDB.** No longer trusts the browser's full project body; only accepts `voiceMapping` and `force`/`targets` intent.
+- **Render summary reports alignment failures.**
+- **Browser status dots show diagnostic tooltips.** e.g. "TTS produced empty audio — retry", "Alignment failed: ...".
+- **Concurrency lowered to 1.** `RENDER_CONCURRENCY=1` in `server/.env.local` because nSpeech (Kokoro) returns empty audio for some requests under concurrent load.
 
 ### NUI Submodule Patches
 - `modules/nui_wc2` carries two local patches on top of upstream `main`:
@@ -145,7 +158,11 @@ Multiple `memory.store` calls are fine — one per topic. The dreaming system de
 
 ### Pitfalls to remember
 - The NUI router caches pages and initially appends them `display:none`. Any component that measures geometry must wait for visibility.
-- If playback/alignment looks wrong, clear `server/data/render_cache/{projectId}/` and remove persisted `slide.tts` data through the API; mixed cache is a common false lead.
+- The render page now reloads the project from the server on every `show()` so editor voice changes are reflected.
+- **`.env.local` overrides `.env`.** A stale `NVOICE_URL` in `server/.env.local` (or in stored app settings via `/api/settings`) will override `.env`.
+- **Node v24 `fetch()` ignores `https.Agent({ rejectUnauthorized: false })`.** If nVoice returns to HTTPS, it must use a trusted cert or the server must use `https.request` / `--use-system-ca`.
+- nSpeech (Kokoro) can return **empty audio** under concurrent load; keep `RENDER_CONCURRENCY=1` until nSpeech is fixed.
+- If playback/alignment looks wrong, clear the project render cache directory and remove persisted `slide.tts` data through the project API; mixed cache is a common false lead.
 - Restart the slideshow server after changing `.env`, `ALIGNMENT_VERSION`, or imported server modules. Restart nVoice after changing Python files in `D:\Work\_GIT\nVoice`.
 
 ## Current Slideshow System
@@ -154,7 +171,7 @@ Multiple `memory.store` calls are fine — one per topic. The dreaming system de
 
 - **Slideshow server:** `server/server.js`, normally served at `http://localhost:3600`.
 - **nSpeech:** Generates MP3 audio from the exact spoken slide text via `NSPEECH_URL`.
-- **nVoice:** Produces speech-to-text segments and word timestamps via `NVOICE_URL`. Current local development uses `https://127.0.0.1:2244` with a self-signed certificate.
+- **nVoice:** Produces speech-to-text segments and word timestamps via `NVOICE_URL`. Current local development uses **HTTP** `http://192.168.0.100:2244` (HTTPS with self-signed cert stopped working with Node v24's `fetch`; the HTTP endpoint was added to nVoice on 2026-06-20).
 - **nDB:** Project persistence is append-style JSONL through `modules/nDB`; do not hand-edit database records unless there is no API path.
 
 ### Spoken Text Contract
