@@ -229,7 +229,12 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
     const para = msg.paragraphs[paraIdx];
     const role = msg.speaker || 'narrator';
     const voiceConfig = project.voiceMapping?.[role] || project.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
-    const renderHash = computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed);
+    // Hash must be computed from the spoken text (after speakText
+    // normalization) because that's what the audio actually contains.
+    // Using raw para.text would mismatch for any paragraph with
+    // *emphasis* markers.
+    const spokenText = speakText(para.text);
+    const renderHash = computeRenderHash(spokenText, voiceConfig.voice, voiceConfig.speed);
 
     // Paragraph is fresh if its stored hash matches current text/voice/speed,
     // the audio exists in the bucket, and alignment is at the current version.
@@ -256,12 +261,8 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
     delete para.alignError;
     delete para.ttsError;
 
-    // Generate TTS
+    // Generate TTS.
     console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: generating TTS...`);
-    // Strip *emphasis* / *stage-direction* markers from spoken text
-    // via the shared speakText() helper. On-screen para.text keeps the
-    // marks; only the TTS-bound text is cleaned.
-    const spokenText = speakText(para.text);
     const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
         text: spokenText,
         voice_name: voiceConfig.voice,
@@ -1167,13 +1168,13 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
 
         const role = msg.speaker || 'narrator';
         const voiceConfig = doc.voiceMapping?.[role] || doc.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
-        const renderHash = computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed);
 
-        // Generate TTS
-        console.log(`[v3 Render] Re-rendering msg${mi}/p${pi}...`);
-        // Strip *emphasis* markers via the shared speakText() helper.
-        // On-screen para.text keeps the marks; only TTS text is cleaned.
+        // Generate TTS. Hash must be computed from spoken text so it
+        // matches what the browser expects for freshness checks.
         const spokenText = speakText(para.text);
+        const renderHash = computeRenderHash(spokenText, voiceConfig.voice, voiceConfig.speed);
+
+        console.log(`[v3 Render] Re-rendering msg${mi}/p${pi}...`);
         const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
             text: spokenText,
             voice_name: voiceConfig.voice,
