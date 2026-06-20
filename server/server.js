@@ -10,6 +10,11 @@ const crypto = require('crypto');
 const tlsAgent = new https.Agent({ rejectUnauthorized: false });
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
+// Render concurrency: how many paragraphs to process in parallel.
+// Each paragraph does TTS → align sequentially within its slot.
+// Kokoro (CPU) and Whisper (GPU) both handle concurrent requests.
+const RENDER_CONCURRENCY = parseInt(process.env.RENDER_CONCURRENCY || '4', 10);
+
 // Attempt to load nDB
 let nDB;
 try {
@@ -966,38 +971,56 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         let processedCount = 0;
         let renderedCount = 0;
         let alignSucceeded = 0;
+        let totalWordsRendered = 0;
         let stopped = false;
 
-        writeRenderProgress(projectId, 'render', 'Starting render...', 0);
-
-        for (let msgIdx = 0; msgIdx < project.messages.length && !controller.signal.aborted; msgIdx++) {
+        // Build the flat list of render targets (msgIdx, paraIdx).
+        const renderTargets = [];
+        for (let msgIdx = 0; msgIdx < project.messages.length; msgIdx++) {
             const msg = project.messages[msgIdx];
-
-            for (let paraIdx = 0; paraIdx < msg.paragraphs.length && !controller.signal.aborted; paraIdx++) {
+            for (let paraIdx = 0; paraIdx < msg.paragraphs.length; paraIdx++) {
                 const para = msg.paragraphs[paraIdx];
                 if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
+                if (targets && !targets.some(t => t.msgIdx === msgIdx && t.paraIdx === paraIdx)) continue;
+                renderTargets.push({ msgIdx, paraIdx });
+            }
+        }
+        const totalToRender = renderTargets.length;
 
-                // If targets are specified, skip paragraphs not in the target list.
-                if (targets && !targets.some(t => t.msgIdx === msgIdx && t.paraIdx === paraIdx)) {
-                    continue;
-                }
+        writeRenderProgress(projectId, 'render', `Starting render (${RENDER_CONCURRENCY} parallel)...`, 0);
+
+        const renderStartTime = Date.now();
+
+        // Worker-pool: process up to RENDER_CONCURRENCY paragraphs at once.
+        // Each worker does TTS → align sequentially within its slot.
+        let nextTargetIdx = 0;
+
+        async function renderWorker() {
+            while (!controller.signal.aborted) {
+                const myIdx = nextTargetIdx++;
+                if (myIdx >= totalToRender) return;
+
+                const { msgIdx, paraIdx } = renderTargets[myIdx];
+                const result = await renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable);
 
                 processedCount++;
-                const result = await renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable);
-                if (result.rendered) renderedCount++;
+                if (result.rendered) {
+                    renderedCount++;
+                    const para = project.messages[msgIdx].paragraphs[paraIdx];
+                    const wordCount = (para.text || '').split(/\s+/).filter(w => w.length > 0).length;
+                    totalWordsRendered += wordCount;
+                }
                 if (result.aligned) alignSucceeded++;
 
-                if (controller.signal.aborted) {
-                    stopped = true;
-                    break;
+                // Progress reporting
+                if (processedCount % 5 === 0 || processedCount === totalToRender) {
+                    const pct = Math.min(99, Math.floor((processedCount / totalToRender) * 100));
+                    const elapsedSec = (Date.now() - renderStartTime) / 1000;
+                    const wps = elapsedSec > 0 ? (totalWordsRendered / elapsedSec).toFixed(1) : '0';
+                    writeRenderProgress(projectId, 'render', `Paragraph ${processedCount}/${totalToRender} (${wps} words/s)`, pct);
                 }
 
-                if (processedCount % 5 === 0 || processedCount === totalParagraphs) {
-                    const pct = Math.min(99, Math.floor((processedCount / totalParagraphs) * 100));
-                    writeRenderProgress(projectId, 'render', `Paragraph ${processedCount}/${totalParagraphs}`, pct);
-                }
-
-                // Persist intermediate state so the UI can refresh status dots.
+                // Periodic intermediate persistence
                 if (processedCount % 10 === 0) {
                     if (db) {
                         const existing = db.get(projectId);
@@ -1014,7 +1037,19 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
                     }
                 }
             }
+            stopped = true;
         }
+
+        // Launch workers and wait for all to finish.
+        const workers = [];
+        for (let i = 0; i < Math.min(RENDER_CONCURRENCY, totalToRender); i++) {
+            workers.push(renderWorker());
+        }
+        await Promise.all(workers);
+
+        // Throughput summary
+        const totalElapsedSec = (Date.now() - renderStartTime) / 1000;
+        const finalWps = totalElapsedSec > 0 ? (totalWordsRendered / totalElapsedSec).toFixed(1) : '0';
 
         // Persist to nDB
         if (db) {
@@ -1039,13 +1074,13 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         renderControllers.delete(projectId);
 
         if (stopped) {
-            console.log(`[v3 Render] Stopped for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${processedCount} processed`);
+            console.log(`[v3 Render] Stopped for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${processedCount} processed, ${finalWps} words/s (${totalElapsedSec.toFixed(1)}s)`);
             writeRenderProgress(projectId, 'stopped', `Render stopped: ${renderedCount} re-rendered, ${alignSucceeded} aligned`, 0);
             return res.json({ stopped: true, project, renderedCount, alignSucceeded, processedCount });
         }
 
-        console.log(`[v3 Render] Complete for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${processedCount} processed`);
-        writeRenderProgress(projectId, 'done', `Render complete: ${renderedCount} re-rendered, ${alignSucceeded} aligned`, 100);
+        console.log(`[v3 Render] Complete for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${processedCount} processed, ${finalWps} words/s (${totalElapsedSec.toFixed(1)}s)`);
+        writeRenderProgress(projectId, 'done', `Render complete: ${renderedCount} re-rendered, ${alignSucceeded} aligned (${finalWps} words/s)`, 100);
         res.json(project);
     } catch (err) {
         renderControllers.delete(projectId);
