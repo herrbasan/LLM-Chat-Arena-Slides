@@ -16,12 +16,12 @@ const NSPEECH_URL = process.env.NSPEECH_URL || 'http://192.168.0.145:2233';
 
 // ─── Helpers ──────────────────────────────────────────────────
 
+const { speakText } = require('./speak-text.js');
+
 function getSpokenText(text) {
-    if (!text) return '';
-    // Strip markdown *emphasis* markers from spoken text. nSpeech would
-    // otherwise speak "asterisk" literally. Mirrors the server-side fix
-    // in server/server.js — keep them in sync.
-    return text.toString().replace(/\*+/g, '');
+    // Delegates to the shared speakText() helper. Single source of truth
+    // for *emphasis* stripping across server + pipeline.
+    return speakText(text);
 }
 
 function getVoiceConfig(role, voiceMapping) {

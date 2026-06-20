@@ -1,26 +1,30 @@
 <div class="page-projects">
-    <!-- Empty state: the entire content area is one big dropzone.
-         The dropzone is invisible by default; the dashed border on
-         the [data-drop] child is the visible drop target. -->
-    <section class="projects-empty" hidden>
-        <nui-dropzone id="import-dropzone-empty">
-            <div data-drop="import" class="dropzone-empty-target">
-                <div class="dropzone-empty-content">
-                    <h2>Drop an Arena conversation to begin</h2>
-                    <p>Or pick a JSON export from your computer.</p>
-                    <nui-button variant="primary">
-                        <button type="button" data-action="import-pick">Select File</button>
-                    </nui-button>
-                </div>
+    <!-- Page-level dropzone overlay. Invisible by default (NUI
+         dropzone design); appears only while dragging a file over
+         the window. Works in both empty and populated states. -->
+    <nui-dropzone id="import-dropzone-page">
+        <div data-drop="import" class="dropzone-page-target">
+            <div class="dropzone-page-content">
+                <nui-icon name="upload" aria-hidden="true"></nui-icon>
+                <h2>Drop Arena conversation to import</h2>
             </div>
-        </nui-dropzone>
+        </div>
+    </nui-dropzone>
+
+    <!-- Empty state: always-visible centered prompt. NOT wrapped in
+         nui-dropzone (which is invisible until drag). The button and
+         text are plain HTML the user can see and click immediately. -->
+    <section class="projects-empty" hidden>
+        <div class="projects-empty-inner">
+            <h2>Drop an Arena conversation to begin</h2>
+            <p>Or pick a JSON export from your computer.</p>
+            <nui-button variant="primary">
+                <button type="button" data-action="import-pick">Select File</button>
+            </nui-button>
+        </div>
     </section>
 
-    <!-- Populated state: a normal list with a top toolbar. No dropzone
-         visible — the user has already imported; if they want to add
-         another, they use the "Import another" button. We could add
-         a dropzone here too for drag-to-add, but it would be hidden
-         until drag anyway. -->
+    <!-- Populated state: a normal list with a top toolbar. -->
     <section class="projects-list">
         <div class="projects-list-toolbar">
             <nui-button variant="outline">

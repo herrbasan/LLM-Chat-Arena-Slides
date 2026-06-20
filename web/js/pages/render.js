@@ -398,12 +398,16 @@ nui.registerPage('render', {
             return stripEmphasisForSpeech(text);
         }
 
-        // Markdown-style *emphasis* markers (single or multiple asterisks)
-        // are spoken by nSpeech as literal "asterisk" tokens. Strip them
-        // from the SPOKEN text only; on-screen slide.text keeps the marks.
+        // Browser-side mirror of pipeline/speak-text.js speakText().
+        // Rewrites *content* → (content) for natural parenthetical
+        // cadence (action beats like *pauses*, *stays*), then strips
+        // any stray asterisks. nSpeech would otherwise speak "asterisk"
+        // literally. On-screen slide.text keeps the marks. Keep in sync
+        // with the canonical server-side helper.
         function stripEmphasisForSpeech(s) {
-            if (!s) return s;
-            return s.toString().replace(/\*+/g, '');
+            return String(s || '')
+                .replace(/\*+([^*]+?)\*+/g, '($1)')
+                .replace(/\*+/g, '');
         }
 
         // ─── Per-slide-type style configuration ─────────────────────
@@ -451,7 +455,7 @@ nui.registerPage('render', {
                 accentBackground: false
             },
             topic: {
-                showEyebrow: true,
+                showEyebrow: false,
                 showSpeaker: false,
                 showHeader: true,
                 layout: 'centered',
@@ -670,6 +674,10 @@ nui.registerPage('render', {
 
         let renderingMessages = new Set();
         let renderingSlides = new Set();
+        // Per-paragraph rendering state. Keyed by `${msgIdx}:${paraIdx}`
+        // so individual paragraphs light up while a message render is
+        // in flight, and dim back to their final state as each completes.
+        let renderingParagraphs = new Set();
 
         function computeMessageStaleness(msg) {
             if (!msg) return 'unrendered'; // defensive: null holes in messages[]
@@ -685,11 +693,11 @@ nui.registerPage('render', {
                 if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
                 const renderHash = computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed);
                 const isFresh = para.renderHash === renderHash
-                    && para.audioPath
+                    && para.audioRef
                     && para.words?.length > 0;
                 if (isFresh) {
                     hasFresh = true;
-                } else if (para.audioPath || para.renderHash) {
+                } else if (para.audioRef || para.renderHash) {
                     hasStale = true;
                 } else {
                     hasUnrendered = true;
@@ -776,15 +784,17 @@ nui.registerPage('render', {
             const out = [];
 
             const renderTopLevelRow = ({ slideIdx, slide }) => {
-                const status = computeStaleness(slide);
+                const slideRendering = renderingSlides.has(slideIdx)
+                    || (slide._paragraphs || []).some(p => renderingParagraphs.has(`${p.msgIdx}:${p.paraIdx}`));
+                const status = slideRendering ? 'rendering' : computeStaleness(slide);
                 const isSelected = slideIdx === currentSlideIdx;
-                const isDimmed = status !== 'fresh' && !renderingSlides.has(slideIdx);
+                const isDimmed = status !== 'fresh' && !slideRendering;
                 const label = slide.type.charAt(0).toUpperCase() + slide.type.slice(1);
                 return `
                     <div data-slide-idx="${slideIdx}" class="render-slide-row render-slide-row--top ${isSelected ? 'is-selected' : ''} ${isDimmed ? 'is-dimmed' : ''}" title="${escapeHtml(label)} (${statusLabel[status]})">
                         <span class="render-slide-row__dot ${status}" data-slide-idx="${slideIdx}"></span>
                         <span class="render-slide-row__label" data-slide-idx="${slideIdx}">${escapeHtml(label)}</span>
-                        ${!renderingSlides.has(slideIdx) ? `<span class="render-slide-row__action"><nui-button variant="icon" data-action="render-slide:${slideIdx}" title="Render this slide"><button type="button" aria-label="Render slide ${slideIdx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button></span>` : ''}
+                        ${!slideRendering ? `<span class="render-slide-row__action"><nui-button variant="icon" data-action="render-slide:${slideIdx}" title="Render this slide"><button type="button" aria-label="Render slide ${slideIdx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button></span>` : ''}
                     </div>
                 `;
             };
@@ -799,20 +809,26 @@ nui.registerPage('render', {
                 if (msg.type && msg.type !== 'conversation') return; // already in top-level
                 msgCounter++;
                 const subSlides = slidesByMsg.get(msgIdx) || [];
-                const isRendering = renderingMessages.has(msgIdx);
+                const isRendering = renderingMessages.has(msgIdx)
+                    || (msg.paragraphs || []).some((_, pi) => renderingParagraphs.has(`${msgIdx}:${pi}`));
                 const status = isRendering ? 'rendering' : computeMessageStaleness(msg);
                 const isDimmed = status !== 'fresh' && !isRendering;
                 const label = msg.label || msg.originalSpeaker || msg.speaker || `Message ${msgIdx + 1}`;
                 const subRows = subSlides.map((sIdx, j) => {
                     const subSlide = deck.slides[sIdx];
-                    const subStatus = computeStaleness(subSlide);
+                    // If any paragraph in this virtual slide is currently
+                    // rendering, show the slide as rendering regardless of
+                    // its overall freshness — gives per-paragraph feedback.
+                    const slideRendering = renderingSlides.has(sIdx)
+                        || (subSlide?._paragraphs || []).some(p => renderingParagraphs.has(`${p.msgIdx}:${p.paraIdx}`));
+                    const subStatus = slideRendering ? 'rendering' : computeStaleness(subSlide);
                     const subSelected = sIdx === currentSlideIdx;
-                    const subDimmed = subStatus !== 'fresh' && !renderingSlides.has(sIdx);
+                    const subDimmed = subStatus !== 'fresh' && !slideRendering;
                     return `
                         <div data-slide-idx="${sIdx}" class="render-slide-row render-slide-row--sub ${subSelected ? 'is-selected' : ''} ${subDimmed ? 'is-dimmed' : ''}" title="Slide ${j + 1} of ${subSlides.length} (${statusLabel[subStatus]})">
                             <span class="render-slide-row__dot ${subStatus}" data-slide-idx="${sIdx}"></span>
                             <span class="render-slide-row__label" data-slide-idx="${sIdx}">Slide ${j + 1} of ${subSlides.length}</span>
-                            ${!renderingSlides.has(sIdx) ? `<span class="render-slide-row__action"><nui-button variant="icon" data-action="render-vslide:${sIdx}" title="Render this virtual slide"><button type="button" aria-label="Render slide ${sIdx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button></span>` : ''}
+                            ${!slideRendering ? `<span class="render-slide-row__action"><nui-button variant="icon" data-action="render-vslide:${sIdx}" title="Render this virtual slide"><button type="button" aria-label="Render slide ${sIdx + 1}"><nui-icon name="redo"></nui-icon></button></nui-button></span>` : ''}
                         </div>
                     `;
                 }).join('');
@@ -911,26 +927,79 @@ nui.registerPage('render', {
                 // v2: fall back to slide render
                 return renderSingleSlide(idx);
             }
+            const msg = deck.messages?.[idx];
+            if (!msg) return;
+            // Build (paraIdx, para) pairs from the ORIGINAL paragraphs array,
+            // filtering out empty/placeholder paragraphs. The paraIdx must
+            // be the index into msg.paragraphs[] (the server's array), not
+            // the filtered array — the server identifies paragraphs by
+            // their positional index.
+            const msgIdx = idx;
+            const paragraphs = [];
+            (msg.paragraphs || []).forEach((p, pi) => {
+                if (p.text && p.text.trim() && p.text.trim() !== '...') {
+                    paragraphs.push({ paraIdx: pi, para: p });
+                }
+            });
+            if (paragraphs.length === 0) return;
+
             renderingMessages.add(idx);
+            // Mark every paragraph as rendering up front so the dots
+            // flip to blue immediately. They clear one-by-one as each
+            // per-paragraph endpoint completes below.
+            paragraphs.forEach(({ paraIdx }) => renderingParagraphs.add(`${msgIdx}:${paraIdx}`));
             renderMessageList();
 
+            let failed = 0;
             try {
-                const res = await fetch(`/api/v3/render-message/${projectId}/${idx}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-                if (!res.ok) throw new Error((await res.json()).error || 'Render failed');
-                const { message } = await res.json();
-                deck.messages[idx] = message;
-                window.SLIDESHOW_APP.deck = deck;
+                for (const { paraIdx } of paragraphs) {
+                    const key = `${msgIdx}:${paraIdx}`;
+                    try {
+                        const res = await fetch(`/api/v3/render-paragraph/${projectId}/${msgIdx}/${paraIdx}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' }
+                        });
+                        if (!res.ok) throw new Error((await res.json()).error || 'Render failed');
+                        const updatedPara = await res.json();
+                        const targetMsg = deck.messages[msgIdx];
+                        if (targetMsg && targetMsg.paragraphs) {
+                            targetMsg.paragraphs[paraIdx] = updatedPara;
+                        }
+                    } catch {
+                        failed++;
+                    } finally {
+                        // Rebuild virtual slides so _paragraphs picks up
+                        // the updated paragraph data (audioRef, words,
+                        // etc.). Without this, computeStaleness reads
+                        // stale _paragraphs snapshots and shows freshly-
+                        // rendered paragraphs as "unrendered" until the
+                        // entire message finishes.
+                        virtualSlides = buildVirtualSlides();
+                        deck.slides = virtualSlides;
+                        window.SLIDESHOW_APP.deck = deck;
+                        invalidateSplitIndexCache();
+
+                        // Each paragraph clears as it finishes, so the
+                        // dots go from blue → final color one at a time.
+                        renderingParagraphs.delete(key);
+                        renderMessageList();
+                    }
+                }
                 virtualSlides = buildVirtualSlides();
                 deck.slides = virtualSlides;
+                window.SLIDESHOW_APP.deck = deck;
                 invalidateSplitIndexCache();
-                nui.components.banner.show({ content: `Message ${idx + 1} rendered`, priority: 'success', autoClose: 2000 });
-            } catch (err) {
-                nui.components.banner.show({ content: `Message ${idx + 1} render failed: ${err.message}`, priority: 'alert', autoClose: 5000 });
+                if (failed === 0) {
+                    nui.components.banner.show({ content: `Message ${idx + 1} rendered`, priority: 'success', autoClose: 2000 });
+                } else {
+                    nui.components.banner.show({ content: `Message ${idx + 1} render: ${paragraphs.length - failed}/${paragraphs.length} ok`, priority: 'alert', autoClose: 5000 });
+                }
             } finally {
                 renderingMessages.delete(idx);
+                // Safety net — if any paragraphs didn't clear (shouldn't
+                // happen, but defend against thrown errors mid-loop),
+                // clear them all.
+                paragraphs.forEach(({ paraIdx }) => renderingParagraphs.delete(`${msgIdx}:${paraIdx}`));
                 renderMessageList();
                 loadSlide(currentSlideIdx);
             }
@@ -972,6 +1041,13 @@ nui.registerPage('render', {
                         if (targetMsg && targetMsg.paragraphs) {
                             targetMsg.paragraphs[para.paraIdx] = updatedPara;
                         }
+                        // Rebuild after each paragraph so staleness
+                        // checks see fresh data immediately.
+                        virtualSlides = buildVirtualSlides();
+                        deck.slides = virtualSlides;
+                        window.SLIDESHOW_APP.deck = deck;
+                        invalidateSplitIndexCache();
+                        renderMessageList();
                     } catch {
                         failed++;
                     }
@@ -1087,9 +1163,28 @@ nui.registerPage('render', {
             setRenderProgress(true, 0, 'Render starting…');
 
             let pollTimer = null;
+            let renderStartMs = Date.now();
+
+            function formatEta(ms) {
+                if (!isFinite(ms) || ms < 0) return '';
+                const totalSec = Math.round(ms / 1000);
+                if (totalSec < 60) return `${totalSec}s`;
+                const min = Math.floor(totalSec / 60);
+                const sec = totalSec % 60;
+                return sec ? `${min}m ${sec}s` : `${min}m`;
+            }
 
             function updateProgress(message, pct) {
-                setRenderProgress(true, pct, `${message} (${pct}%)`);
+                // Estimate TTA from elapsed time and current percentage. Skip
+                // the estimate during the first few seconds — at 0% the math
+                // divides by zero, and at 1-2% the estimate is wildly wrong.
+                let eta = '';
+                if (pct > 5) {
+                    const elapsedMs = Date.now() - renderStartMs;
+                    const remainingMs = (elapsedMs / pct) * (100 - pct);
+                    eta = ` · ETA ${formatEta(remainingMs)}`;
+                }
+                setRenderProgress(true, pct, `${message} (${pct}%)${eta}`);
             }
 
             async function refreshProjectStatus() {
@@ -1116,7 +1211,7 @@ nui.registerPage('render', {
                     if (!res.ok) return;
                     const p = await res.json();
                     updateProgress(p.message, p.pct);
-                    if (p.stage === 'done') {
+                    if (p.stage === 'done' || p.stage === 'stopped') {
                         clearInterval(pollTimer);
                     }
                     // Refresh message status dots every few percent
@@ -1276,6 +1371,12 @@ nui.registerPage('render', {
 
             html += `</div>`;
 
+            // Swap the slide content. Speaker-change visual treatment
+            // is handled purely via CSS (the .slide--new-speaker class
+            // hook), not JS animations. The previous WAAPI transition
+            // was removed — it triggered on wrong events and duplicated
+            // slides. A proper transition system needs to be driven by
+            // the playback timeline, not by loadSlide() calls.
             playerContent.innerHTML = html;
 
             // Load audio if rendered

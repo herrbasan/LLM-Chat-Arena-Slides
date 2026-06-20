@@ -60,40 +60,45 @@ nui-button[data-step].is-active .stepper-num {
     gap: var(--nui-space);
 }
 
-/* Empty state: dropzone fills the available area, the [data-drop]
- * child inside is the visible dashed target. */
+/* Empty state: centered prompt, always visible. NOT wrapped in
+ * nui-dropzone (which is invisible until drag). The inner block
+ * centers content both axes via flex. */
 .projects-empty {
     flex: 1;
     min-height: 0;
     display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
-.projects-empty nui-dropzone {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-}
-
-/* Center the visible [data-drop] target both axes. */
-.dropzone-empty-target {
-    margin: auto;
-    max-width: 36rem;
-    /* nui-dropzone's default styling on [data-drop] children already
-     * provides a dashed border, dim text, and a tinted background.
-     * The default padding is fine. */
-}
-
-.dropzone-empty-content {
+.projects-empty-inner {
     text-align: center;
+    max-width: 36rem;
 }
 
-.dropzone-empty-content h2 {
+.projects-empty-inner h2 {
     margin: 0 0 var(--nui-space-half) 0;
 }
 
-.dropzone-empty-content p {
+.projects-empty-inner p {
     margin: 0 0 var(--nui-space) 0;
     color: var(--text-color-dim);
+}
+
+/* Page-level dropzone overlay target (drag-to-import). Only visible
+ * while a file is being dragged (NUI dropzone [active] state). */
+.dropzone-page-target {
+    min-height: 6rem;
+}
+.dropzone-page-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--nui-space-half);
+    text-align: center;
+}
+.dropzone-page-content h2 {
+    margin: 0;
 }
 
 /* Populated state: toolbar at the top, list fills the rest. The
@@ -158,12 +163,16 @@ nui-button[data-step].is-active .stepper-num {
  * the nui-select popover (position:absolute) when it extends
  * below the dialog's content area. z-index doesn't help — only
  * overflow: visible lets a position:absolute child escape its
- * ancestor's clipping region. Override both. */
-nui-dialog[mode="page"] dialog {
+ * ancestor's clipping region.
+ *
+ * Scope the override to dialogs that actually contain a nui-select,
+ * so other page-mode dialogs (e.g. the editor's Edit Message dialog)
+ * keep <main>'s natural overflow-y: auto and scroll correctly. */
+nui-dialog[mode="page"] dialog:has(nui-select) {
     overflow: visible;
 }
 
-nui-dialog[mode="page"] dialog > main {
+nui-dialog[mode="page"] dialog:has(nui-select) > main {
     overflow: visible;
 }
 
@@ -424,23 +433,30 @@ nui-dialog[mode="page"] .options-source {
 }
 
 .editor-paragraph-status {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    display: inline-block;
+    width: var(--nui-space-double);
+    height: var(--nui-space-double);
+    display: flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
-    margin-top: 0.4em;
 }
 
-.editor-paragraph-status.status-aligned {
+.editor-paragraph-status::after {
+    content: '';
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+}
+
+.editor-paragraph-status.status-aligned::after {
     background: var(--color-highlight);
 }
 
-.editor-paragraph-status.status-audio {
+.editor-paragraph-status.status-audio::after {
     background: #d4a017;
 }
 
-.editor-paragraph-status.status-unrendered {
+.editor-paragraph-status.status-unrendered::after {
     background: var(--text-color-dim);
 }
 
@@ -449,6 +465,59 @@ nui-dialog[mode="page"] .options-source {
     color: var(--text-color);
     flex: 1;
 }
+
+/* ─── Edit Message Dialog ────────────────────────────────── */
+/* Used inside the nui-dialog opened from the editor when the
+   user clicks Edit on a v3 message card. Each paragraph gets
+   its own card with a textarea and inline join/split buttons.
+
+   The dialog's <main> handles scrolling (see nui-theme.css). We
+   only style the inner cards. The page-mode dialog sets overflow:
+   visible only when it contains a nui-select, so this dialog
+   keeps <main>'s natural overflow-y: auto and grows to fill the
+   available space. */
+.edit-msg-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nui-space);
+}
+
+.edit-msg-paragraph {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nui-space-half);
+    padding: var(--nui-space);
+    background: var(--color-shade1);
+    border-radius: var(--border-radius2);
+}
+
+.edit-msg-paragraph-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--nui-space);
+    flex-wrap: wrap;
+}
+
+.edit-msg-paragraph-actions {
+    display: flex;
+    gap: var(--nui-space-half);
+    flex-shrink: 0;
+}
+
+.edit-msg-paragraph textarea {
+    width: 100%;
+    font-family: inherit;
+    font-size: var(--font-size-small);
+    box-sizing: border-box;
+}
+
+.edit-msg-hint {
+    font-size: var(--font-size-xsmall);
+    color: var(--text-color-dim);
+    margin-top: var(--nui-space);
+}
+
 /* ─── Word Highlighting (Playback) ─────────────────────────── */
 
 .words-container {
@@ -528,13 +597,28 @@ nui-dialog[mode="page"] .options-source {
 .slide--conversation { }
 .slide--end { }
 
+/* Topic slide: bold, punchy, centered. The seed prompt that started
+ * the conversation — no eyebrow, just typography. The accent-bg hook
+ * provides the surface; this adds the typographic weight. */
+.slide--topic .slide-body--text {
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
 /* Per-role hook. Allows per-speaker tinting of the conversation slide. */
 .slide--speaker-narrator { }
-.slide--speaker-participantA {
-    /* No default; tune as you like. */
+
+/* Speaker accent borders on conversation slides. participantA gets the
+ * highlight blue, participantB gets palette-mark gold. Thin left border
+ * only — keeps the reading surface clean while making the speaker
+ * switch instantly recognizable. */
+.slide--speaker-participantA .slide-body {
+    border-left: 3px solid var(--color-highlight);
+    padding-left: var(--nui-space);
 }
-.slide--speaker-participantB {
-    /* No default; tune as you like. */
+.slide--speaker-participantB .slide-body {
+    border-left: 3px solid var(--palette-mark);
+    padding-left: var(--nui-space);
 }
 
 /* Position-in-deck hooks. */
@@ -542,9 +626,13 @@ nui-dialog[mode="page"] .options-source {
 .slide--last { }
 
 /* New-speaker transition. The renderer adds this class to a slide
- * whose speaker differs from the previous slide. The hook is here for
- * any visual treatment you want — currently no default treatment. */
-.slide--new-speaker { }
+ * whose speaker differs from the previous slide. A subtle top border
+ * marks the handoff between participants without breaking the reading
+ * flow. */
+.slide--new-speaker {
+    padding-top: var(--nui-space);
+    border-top: 1px solid var(--border-shade2);
+}
 
 /* Split-chunk hooks. Conversation slides that are part of a multi-chunk
  * split of a single source message get one of these. */
@@ -950,7 +1038,10 @@ body.render-recording #player-slide-content {
 .render-status-dot.fresh .render-status-dot__mark { background: var(--color-highlight); }
 .render-status-dot.stale .render-status-dot__mark { background: #d4a017; }
 .render-status-dot.unrendered .render-status-dot__mark { background: var(--text-color-dim); }
-.render-status-dot.rendering .render-status-dot__mark { background: var(--text-color-dim); opacity: 0.5; }
+.render-status-dot.rendering .render-status-dot__mark {
+    background: #4a9eff;
+    animation: render-pulse 1s ease-in-out infinite;
+}
 
 .render-slide-row {
     display: flex;
@@ -984,7 +1075,15 @@ body.render-recording #player-slide-content {
 .render-slide-row__dot.fresh { background: var(--color-highlight); }
 .render-slide-row__dot.stale { background: #d4a017; }
 .render-slide-row__dot.unrendered { background: var(--text-color-dim); }
-.render-slide-row__dot.rendering { background: var(--text-color-dim); opacity: 0.5; }
+.render-slide-row__dot.rendering {
+    background: #4a9eff;
+    animation: render-pulse 1s ease-in-out infinite;
+}
+
+@keyframes render-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(1.4); }
+}
 
 .render-slide-row__label {
     font-size: var(--font-size-small);

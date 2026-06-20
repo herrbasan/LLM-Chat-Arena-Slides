@@ -10,6 +10,112 @@
 - **Collaborative Development:** The human user is a partner, not just a reviewer. When facing architectural decisions, trade-offs, or uncertain paths, pause and ask for input. Explain the options clearly. The user's domain knowledge and preferences are valuable — include them in the loop. Avoid long silent stretches of trial-and-error; converse, don't just execute.
 - **Use Provided Tools:** Always use the built-in VS Code read/write tools to apply changes directly when asked. Do NOT use terminal commands, shell commands, or scripts to edit files, as these bypass VS Code's file tracking, history, and diff views, making it impossible for the human partner to follow along. Do not output giant code blocks in text for the user to copy-paste.
 
+## Session Priming
+
+Every session starts blind. Before writing any code, run the priming sequence below. The goal is to load the cross-session context (memory topology, curated docs, library mental model) that the LLM does not have on its own.
+
+### Step 1 — `memory.overview` (workshop memory)
+
+Call the workshop memory tool's `memory.overview` to get the cluster map for this account. It returns clusters, cross-cluster bridges, wildcards, and the top nodes by cluster. Use it to identify which prior work is relevant to the current request before recalling specifics.
+
+- **Format:** start with `summary` (the default) — it lists clusters and top nodes without dumping all 182+ nodes. Switch to `full` only when the summary is missing the area you need.
+- **Recency gap:** the topology lags the most recent ~4 days. For anything from the last few days, use `memory.recall` with a focused query (e.g. `query: "Arena Slides import flow"`).
+- **What to look for:** the cluster whose hub matches the current task (e.g. Arena Slides Project = #434, nSpeech = #330, NUI = #295) and the cross-cluster bridges that connect it to dependencies (e.g. #434 ↔ #330 means Arena Slides TTS depends on nSpeech).
+
+### Step 2 — `documentation` tool (curated project docs)
+
+The workshop `documentation` tool exposes the project's curated documentation set across domains. The active domain for this project is **Web UI** (NUI library). Pull the relevant docs before writing UI code.
+
+```
+# List domains
+documentation.domains
+
+# List files in a domain
+documentation.list  (domain: "Web UI")
+
+# Read a file
+documentation.get   (file: "Web UI/reference_cheatsheet.md")
+```
+
+For NUI work, always read at minimum:
+- `Web UI/reference_cheatsheet.md` — the canonical rule set, WRONG vs CORRECT patterns
+- `Web UI/concept_ax_vs_dx.md` — the design philosophy (AX > DX, explicit over clever)
+- `Web UI/concept_data_action.md` — the `data-action` grammar, event flow, built-in actions
+- `Web UI/guide_getting_started.md` — loading sequence, app/page modes, theming
+- `Web UI/guide_architecture_patterns.md` — router, `nui-page` layout, page lifecycle
+
+For component-specific work, also pull `Web UI/component_{name}.md` (e.g. `component_list.md` for `nui-list`). Component docs are short and dated; the registry at `documentation.list` shows which exist.
+
+**Source-of-truth precedence:** workshop docs (curated, dated) > local submodule files. Fall back to local files only when the workshop doc is missing detail:
+- `modules/nui_wc2/LLM-CHEATSHEET.md` (local copy of the cheatsheet)
+- `modules/nui_wc2/documentation/DOCUMENTATION.md` (full architecture)
+- `modules/nui_wc2/documentation/components.json` (component registry)
+- `modules/nui_wc2/documentation/components/{name}.md` (per-component)
+- `modules/nui_wc2/NUI/css/nui-theme.css` (theme variables — the complete list)
+- `modules/nui_wc2/NUI/nui.js` (core API)
+
+### Step 3 — NUI mental model (must internalize before writing HTML/CSS)
+
+NUI is built for **LLM-generated code** (AX > DX), not human developers. The philosophy: *strip the framework magic, keep the platform-native primitives, let the browser do the work.* The DOM is the source of truth. `nui-*` custom elements are thin semantic upgrades over native HTML.
+
+#### Conventions I keep getting wrong
+
+| My training bias | NUI rule |
+|---|---|
+| `<nui-button>Save</nui-button>` | `<nui-button><button type="button">Save</button></nui-button>` — always wrap the native element |
+| `document.querySelector('.btn')` | `element.querySelector('.btn')` — scope to the page wrapper passed to `init()` |
+| `el.addEventListener('click', fn)` | `<button data-action="save:draft">` + `nui.registerAction('save', ...)` or `addEventListener('nui-action-save', ...)` |
+| `<style>nui-button { ... }</style>` | Never style `nui-*`. Use `variant`/`type`/`size`/`fill` attributes. For spacing, wrap in your own `<div>` with `gap: var(--nui-space)`. |
+| `addEventListener('nui-click', ...)` | Don't. `nui-click` is internal. Use `data-action` or listen for the native event on the inner element. |
+| App: free-form children | `<nui-app>` requires exact order: `nui-skip-links` → `nui-app-header` → `nui-sidebar` → `nui-content` → (optional `nui-app-footer`). Each must contain its native element. |
+| Custom CSS variables | Only NUI theme tokens: `--color-base`, `--color-shade1-9`, `--color-highlight`, `--nui-space`, `--border-shade1-4`, `--border-radius1-3`. Never invent new ones. |
+| Skip `await nui.ready()` | Always `await nui.ready()` before any programmatic API call. |
+| Core component imports | Addons (`nui-list`, `nui-wizard`, `nui-menu`, etc.) need BOTH JS + CSS imports. Core components don't. |
+| `innerHTML += ...` for state updates | DOM is the source of truth; mutate it imperatively. |
+
+#### `data-action` grammar
+
+```
+data-action="name:param@target"
+```
+
+- `name` = action verb (required)
+- `param` = optional context (e.g. `save:draft`)
+- `target` = CSS selector for the target (defaults to trigger element)
+- Built-ins: `dialog-open@#id`, `dialog-close`, `tabs-select:n`, `sidebar-toggle`, `theme-toggle`, `dropdown-toggle`, `accordion-toggle`, `sortable-start/end`, `menu-open@#id`, `lightbox-open@#id`, `wizard-next/prev`, `media-play/pause`, `rich-text-action:cmd`
+- Two events fire: `nui-action` (generic) and `nui-action-{name}` (specific). Both bubble.
+- `e.stopPropagation()` scopes an action to a component.
+- For global handling, use `nui.registerAction(name, handler)`.
+
+#### Router & page lifecycle
+
+- **Three patterns:** centralized (`registerFeature`), fragment-based (`setupRouter` + `registerPage`), hybrid.
+- This project uses **fragment-based** — pages in `web/pages/`, registered via `nui.registerPage(name, { html, init })`.
+- **`init()` runs once, `show()` runs on each navigation.** The router caches containers; inactive ones get `display:none`. Geometry-measuring components (like `nui-list`) must wait for visibility before measuring.
+- **`nui-page` layout:** wraps page content in `--space-page-maxwidth` (~56rem). Use `breakout` attribute to escape it; use `.maxwidth-container` inside a breakout to re-constrain.
+
+#### Debugging NUI
+
+- `?nui-debug` query param auto-loads the validator.
+- Or import `nui-debug.js` + `nui-debug.css` explicitly.
+- `nui.debug.run()` returns `{ valid, count, issues: [{element, message, fix}] }`.
+- Dev-only — zero production cost if you don't import it.
+
+### Step 4 — End-of-session: persist via workshop memory
+
+When the user signals end-of-session ("we're done", "that's it for today", "let's wrap"), persist what landed through the **workshop memory system** (`mcp_workshop_tools`), not the local `memory` tool. The local memory tool is workspace-scoped and short-lived; workshop memory is the durable, dreaming-clustered cross-workspace store.
+
+```
+mcp_workshop_tools.call(method="memory.store", payload={
+  description: "<one-line summary>",
+  category: "<Arena Slides | Preferences | nSpeech | ...>",
+  confidence: <0..1>,
+  data: "<what changed, why, what's deferred, operational reminders>"
+})
+```
+
+Multiple `memory.store` calls are fine — one per topic. The dreaming system deduplicates and clusters. Prefer workshop docs over the local `documentation` tool's domain files when both are available.
+
 ## Verified Project State — 2026-06-13
 
 ### Architecture

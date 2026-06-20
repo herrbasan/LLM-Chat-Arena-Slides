@@ -26,16 +26,19 @@ const { buildProject } = require('../pipeline/build-messages.js');
 const { parseArenaExport } = require('../pipeline/importer.js');
 const { processInput: ttsProcess } = require('../pipeline/tts.js');
 const { processInput: alignProcess, processProject: alignProject, ALIGNMENT_VERSION } = require('../pipeline/align.js');
+const { speakText } = require('../pipeline/speak-text.js');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// Global CSP header (replaces meta tag to avoid browser placement warnings)
+// Global CSP header (replaces meta tag to avoid browser placement warnings).
+// media-src * allows the browser to play TTS preview audio directly
+// from nSpeech without a server proxy (same as LLM Gateway Chat).
 app.use((req, res, next) => {
     res.setHeader(
         'Content-Security-Policy',
-        "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; img-src 'self' data:;"
+        "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; media-src *; img-src 'self' data:;"
     );
     next();
 });
@@ -66,7 +69,6 @@ if (nDB) {
 }
 
 // ─── Application Settings (runtime, persisted in nDB) ─────────
-//
 // URL/model settings are stored in nDB as a single record. The record
 // is found at startup by scanning for _type === 'app_settings' (a
 // field nDB itself never sets, so the marker is unambiguous). Its
@@ -143,24 +145,65 @@ function getPublicSettings(includeSecrets = false) {
     return s;
 }
 
-// ─── Render Cache ───────────────────────────────────────────
-// Each project gets its own render cache directory.
-// Audio files are stored per-slide and keyed by renderHash.
-const RENDER_CACHE_ROOT = path.join(dbPath, 'render_cache');
-fs.mkdirSync(RENDER_CACHE_ROOT, { recursive: true });
+// ─── Render Audio Storage (nDB file bucket) ──────────────────
+// Rendered audio is stored in a single nDB bucket "rendered_slides".
+// nDB deduplicates by SHA-256 content hash, so identical audio across
+// projects shares storage. Each paragraph/slide stores a compact
+// FileRef string (e.g. "rendered_slides:69538b86.mp3") as audioRef.
+// The browser fetches via the dynamic /audio/:bucket/:id.:ext route.
+// Orphaned files are cleaned via db.gcBuckets() after mutations.
+const AUDIO_BUCKET = 'rendered_slides';
+
+// Transient render-progress JSON files (not audio — just polling state).
+// Stored on disk under data/render_progress/{projectId}.json.
+const RENDER_PROGRESS_ROOT = path.join(dbPath, 'render_progress');
+fs.mkdirSync(RENDER_PROGRESS_ROOT, { recursive: true });
 
 // Per-project render abort controllers so the user can stop a
 // long-running Render All operation without restarting the server.
 const renderControllers = new Map();
 
-function getProjectCacheDir(projectId) {
-    const dir = path.join(RENDER_CACHE_ROOT, projectId);
-    fs.mkdirSync(dir, { recursive: true });
-    return dir;
+// Store an audio buffer in the bucket. Returns { audioRef, audioUrl }.
+function storeAudio(name, audioBuffer) {
+    const meta = db.storeFile(AUDIO_BUCKET, name, audioBuffer, 'audio/mpeg');
+    const ref = `${meta._file.bucket}:${meta._file.id}.${meta._file.ext}`;
+    const url = `/audio/${meta._file.bucket}/${meta._file.id}.${meta._file.ext}`;
+    return { audioRef: ref, audioUrl: url, byteLength: audioBuffer.length };
+}
+
+// Read audio bytes from the bucket by parsing a compact FileRef string.
+function readAudio(audioRef) {
+    // audioRef format: "bucket:id.ext"
+    const m = audioRef.match(/^([^:]+):([^.]+)\.(.+)$/);
+    if (!m) throw new Error(`Invalid audioRef: ${audioRef}`);
+    return db.getFile(m[1], m[2], m[3]);
+}
+
+// Check if an audioRef's file exists in the bucket (by attempting a
+// lightweight listFiles lookup). Used for freshness checks.
+function audioExists(audioRef) {
+    if (!audioRef) return false;
+    try {
+        readAudio(audioRef);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+// Garbage-collect orphaned audio. Call after any mutation that may
+// drop audioRef values from documents (delete, save, re-render).
+function gcAudio() {
+    try {
+        const trashed = db.gcBuckets();
+        if (trashed > 0) console.log(`[Audio GC] Trashed ${trashed} orphaned file(s)`);
+    } catch (err) {
+        console.error('[Audio GC] Failed:', err.message);
+    }
 }
 
 function getProjectRenderProgressPath(projectId) {
-    return path.join(getProjectCacheDir(projectId), 'render-progress.json');
+    return path.join(RENDER_PROGRESS_ROOT, `${projectId}.json`);
 }
 
 function writeRenderProgress(projectId, stage, message, pct) {
@@ -176,34 +219,31 @@ function writeRenderProgress(projectId, stage, message, pct) {
     }
 }
 
-async function renderParagraph(project, msgIdx, paraIdx, cacheDir, nVoiceAvailable) {
+async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, options = {}) {
     const msg = project.messages[msgIdx];
     const para = msg.paragraphs[paraIdx];
     const role = msg.speaker || 'narrator';
     const voiceConfig = project.voiceMapping?.[role] || project.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
     const renderHash = computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed);
-    const projectId = path.basename(cacheDir);
-    const audioFile = `msg_${msgIdx}_p_${paraIdx}_${renderHash}.mp3`;
-    const audioPath = path.join(cacheDir, audioFile);
-    const audioUrl = `/cache/audio/${projectId}/${audioFile}`;
 
     // Paragraph is fresh if its stored hash matches current text/voice/speed,
-    // the audio file exists, and alignment is at the current version.
+    // the audio exists in the bucket, and alignment is at the current version.
+    // `force` (set by explicit per-message / per-paragraph user clicks)
+    // bypasses the freshness check — the user asked for it, do it.
     const isFresh = para.renderHash === renderHash
-        && para.audioPath
-        && fs.existsSync(para.audioPath)
+        && para.audioRef
+        && audioExists(para.audioRef)
         && para.alignVersion === ALIGNMENT_VERSION
         && para.words?.length > 0;
 
-    if (isFresh) {
+    if (isFresh && !options.force) {
         return { rendered: false, aligned: false };
     }
 
-    // Clear stale render data for this paragraph. Old audio file will be
-    // overwritten or cleaned up later.
+    // Clear stale render data for this paragraph. Old audio will be
+    // garbage-collected by gcBuckets() after the render completes.
+    delete para.audioRef;
     delete para.audioUrl;
-    delete para.audioFile;
-    delete para.audioPath;
     delete para.words;
     delete para.durationMs;
     delete para.alignComplete;
@@ -213,8 +253,12 @@ async function renderParagraph(project, msgIdx, paraIdx, cacheDir, nVoiceAvailab
 
     // Generate TTS
     console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: generating TTS...`);
+    // Strip *emphasis* / *stage-direction* markers from spoken text
+    // via the shared speakText() helper. On-screen para.text keeps the
+    // marks; only the TTS-bound text is cleaned.
+    const spokenText = speakText(para.text);
     const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
-        text: para.text,
+        text: spokenText,
         voice_name: voiceConfig.voice,
         speed: (voiceConfig.speed || 1.0).toString(),
         output_format: 'mp3'
@@ -229,15 +273,16 @@ async function renderParagraph(project, msgIdx, paraIdx, cacheDir, nVoiceAvailab
     }
 
     const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
-    fs.writeFileSync(audioPath, audioBuffer);
+    const { audioRef, audioUrl, byteLength } = storeAudio(
+        `msg_${msgIdx}_p_${paraIdx}_${renderHash}.mp3`, audioBuffer
+    );
 
-    para.audioFile = audioFile;
-    para.audioPath = audioPath;
+    para.audioRef = audioRef;
     para.audioUrl = audioUrl;
     para.renderHash = renderHash;
     para.voice = voiceConfig.voice;
     para.speed = voiceConfig.speed;
-    para.byteLength = audioBuffer.length;
+    para.byteLength = byteLength;
 
     // Align immediately while the audio is fresh.
     let aligned = false;
@@ -286,11 +331,10 @@ function getSpokenText(slide) {
     } else {
         text = slide.text || slide.narration || '';
     }
-    // Markdown-style *emphasis* markers are spoken by nSpeech as literal
-    // "asterisk" tokens. Strip them from the SPOKEN text only; on-screen
-    // slide.text keeps the marks. Mirrors stripEmphasisForSpeech in
-    // web/js/pages/render.js — keep the two in sync.
-    return text ? text.toString().replace(/\*+/g, '') : text;
+    // Strip *emphasis* markers via the shared speakText() helper.
+    // On-screen slide.text keeps the marks; only spoken text is cleaned.
+    // Browser-side mirror: stripEmphasisForSpeech in render.js.
+    return speakText(text);
 }
 
 function normalizeAlignedWord(word) {
@@ -301,25 +345,6 @@ function isImmediateDuplicateWord(previousWord, word) {
     if (!previousWord) return false;
     if (word.startMs - previousWord.endMs > 250) return false;
     return normalizeAlignedWord(previousWord.word) === normalizeAlignedWord(word.word);
-}
-
-function getSlideAudioPath(projectId, slideIndex, renderHash) {
-    return path.join(getProjectCacheDir(projectId), `slide_${String(slideIndex).padStart(3, '0')}_${renderHash}.mp3`);
-}
-
-function getSlideCacheMeta(projectId) {
-    const metaPath = path.join(getProjectCacheDir(projectId), 'cache_meta.json');
-    if (fs.existsSync(metaPath)) {
-        try {
-            return JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-        } catch { return {}; }
-    }
-    return {};
-}
-
-function setSlideCacheMeta(projectId, meta) {
-    const metaPath = path.join(getProjectCacheDir(projectId), 'cache_meta.json');
-    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
 }
 
 // Serve Client Config dynamically. Reads from getSettings() so URL
@@ -404,45 +429,10 @@ app.get('/api/projects/:id', (req, res) => {
         return res.json(doc);
     }
 
-    // v2 projects: merge render cache from deck.json
-    const deckPath = path.join(getProjectCacheDir(req.params.id), 'deck.json');
-    if (fs.existsSync(deckPath)) {
-        const cached = JSON.parse(fs.readFileSync(deckPath, 'utf-8'));
-        if (cached.slides && doc.slides) {
-            for (let i = 0; i < doc.slides.length; i++) {
-                const cacheSlide = cached.slides[i];
-                if (!cacheSlide || !cacheSlide.tts) continue;
-                if (!doc.slides[i].tts) doc.slides[i].tts = {};
-                // Merge alignment data from cache
-                if (cacheSlide.tts.words) {
-                    doc.slides[i].tts.words = cacheSlide.tts.words;
-                }
-                if (cacheSlide.tts.segments) {
-                    doc.slides[i].tts.segments = cacheSlide.tts.segments;
-                }
-                if (cacheSlide.tts.durationMs) {
-                    doc.slides[i].tts.durationMs = cacheSlide.tts.durationMs;
-                }
-                if (cacheSlide.tts.alignVersion) {
-                    doc.slides[i].tts.alignVersion = cacheSlide.tts.alignVersion;
-                }
-                if (cacheSlide.tts.alignComplete !== undefined) {
-                    doc.slides[i].tts.alignComplete = cacheSlide.tts.alignComplete;
-                }
-                if (cacheSlide.tts.sourceWordCount) {
-                    doc.slides[i].tts.sourceWordCount = cacheSlide.tts.sourceWordCount;
-                }
-                if (cacheSlide.tts.alignedWordCount) {
-                    doc.slides[i].tts.alignedWordCount = cacheSlide.tts.alignedWordCount;
-                }
-                // Ensure audioUrl is present (may be missing in nDB after import)
-                if (cacheSlide.tts.audioUrl && !doc.slides[i].tts.audioUrl) {
-                    doc.slides[i].tts.audioUrl = cacheSlide.tts.audioUrl;
-                }
-            }
-        }
-    }
-
+    // v3 projects store everything (including tts data) directly in nDB.
+    // v2 projects now persist rendered slide data (audioRef, audioUrl,
+    // alignment) to nDB via the render-deck endpoint, so no separate
+    // cache merge is needed.
     res.json(doc);
 });
 
@@ -539,7 +529,7 @@ app.put('/api/projects/:id', (req, res) => {
     if (!db) return res.status(500).json({ error: 'Database not initialized' });
     const existing = db.get(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Project not found' });
-    
+
     const updated = {
         ...existing,
         ...req.body,
@@ -551,12 +541,23 @@ app.put('/api/projects/:id', (req, res) => {
         updated.version = existing.version;
     }
     db.update(req.params.id, updated);
+
+    // GC orphan audio: after the client strips cached TTS data (e.g.
+    // via the editor's Edit Message dialog, which replaces paragraphs
+    // with fresh `{ text }` objects), the old audioRefs are gone from
+    // the document. nDB's gcBuckets() sweeps all unreferenced files.
+    gcAudio();
+
     res.json({ status: 'updated' });
 });
 
 app.delete('/api/projects/:id', (req, res) => {
     if (!db) return res.status(500).json({ error: 'Database not initialized' });
     db.delete(req.params.id);
+    // The conversation document is now in nDB's trash. Its audioRefs
+    // are no longer referenced by any active document — gcBuckets()
+    // moves them to the file trash.
+    gcAudio();
     res.json({ status: 'deleted' });
 });
 
@@ -821,24 +822,8 @@ app.post('/api/render-deck/:id', async (req, res) => {
             return res.status(400).json({ error: 'Invalid deck: missing slides array' });
         }
 
-        // Always start fresh — delete any cached audio from previous
-        // renders. The cleaning prompt and TTS config change too often
-        // during development for stale-cache logic to be worth the bugs.
-        const cacheDir = getProjectCacheDir(projectId);
-        if (fs.existsSync(cacheDir)) {
-            fs.rmSync(cacheDir, { recursive: true, force: true });
-        }
-        fs.mkdirSync(cacheDir, { recursive: true });
-        const cacheMeta = {};
         let reRendered = 0;
-        let cached = 0; // always 0 now — cache is cleared above, but keep for log lines
-
-        // Load existing render cache to preserve alignment data for cache-hit slides
-        const deckPath = path.join(cacheDir, 'deck.json');
-        let prevDeck = null;
-        if (fs.existsSync(deckPath)) {
-            try { prevDeck = JSON.parse(fs.readFileSync(deckPath, 'utf-8')); } catch {}
-        }
+        let cached = 0;
 
         for (let i = 0; i < deck.slides.length; i++) {
             const slide = deck.slides[i];
@@ -847,33 +832,10 @@ app.post('/api/render-deck/:id', async (req, res) => {
             const voiceConfig = deck.voiceMapping[role] || deck.voiceMapping.narrator || { voice: 'en-US-Male', speed: 1.0 };
             const renderHash = computeRenderHash(text, voiceConfig.voice, voiceConfig.speed);
 
-            const cachedHash = cacheMeta[i];
-            const audioPath = getSlideAudioPath(projectId, i, renderHash);
-            const audioUrl = `/cache/audio/${projectId}/slide_${String(i).padStart(3, '0')}_${renderHash}.mp3`;
-
-            if (cachedHash === renderHash && fs.existsSync(audioPath)) {
-                // Cache hit — reuse existing audio, preserve alignment data from previous render
-                const prevSlide = prevDeck?.slides?.[i];
-                const prevTts = prevSlide?.tts;
-                slide.tts = {
-                    audioFile: path.basename(audioPath),
-                    audioPath: audioPath,
-                    audioUrl: audioUrl,
-                    voice: voiceConfig.voice,
-                    speed: voiceConfig.speed,
-                    renderHash: renderHash,
-                    cached: true,
-                    // Preserve alignment data if the text hasn't changed
-                    ...(prevTts?.renderHash === renderHash && prevTts.alignVersion === ALIGNMENT_VERSION && prevTts.words ? {
-                        words: prevTts.words,
-                        segments: prevTts.segments,
-                        durationMs: prevTts.durationMs,
-                        alignComplete: prevTts.alignComplete,
-                        sourceWordCount: prevTts.sourceWordCount,
-                        alignedWordCount: prevTts.alignedWordCount,
-                        alignVersion: prevTts.alignVersion,
-                    } : {})
-                };
+            // Cache hit: audioRef exists and hash matches. Reuse audio,
+            // preserve alignment data if the hash hasn't changed.
+            if (slide.tts?.audioRef && slide.tts.renderHash === renderHash && audioExists(slide.tts.audioRef)) {
+                slide.tts.cached = true;
                 cached++;
                 continue;
             }
@@ -895,34 +857,19 @@ app.post('/api/render-deck/:id', async (req, res) => {
             }
 
             const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
-            fs.writeFileSync(audioPath, audioBuffer);
+            const { audioRef, audioUrl, byteLength } = storeAudio(
+                `slide_${String(i).padStart(3, '0')}_${renderHash}.mp3`, audioBuffer
+            );
 
             slide.tts = {
-                audioFile: path.basename(audioPath),
-                audioPath: audioPath,
-                audioUrl: audioUrl,
+                audioRef,
+                audioUrl,
                 voice: voiceConfig.voice,
                 speed: voiceConfig.speed,
-                byteLength: audioBuffer.length,
+                byteLength,
                 renderHash
             };
-
-            cacheMeta[i] = renderHash;
             reRendered++;
-        }
-
-        setSlideCacheMeta(projectId, cacheMeta);
-
-        // Save deck before alignment (so we have a checkpoint)
-        fs.writeFileSync(deckPath, JSON.stringify(deck, null, 2), 'utf-8');
-
-        // Ensure audioPath is set for all slides (client may only send audioUrl)
-        for (let i = 0; i < deck.slides.length; i++) {
-            const slide = deck.slides[i];
-            if (slide.tts && slide.tts.audioUrl && !slide.tts.audioPath) {
-                const audioFile = path.basename(slide.tts.audioUrl);
-                slide.tts.audioPath = path.join(RENDER_CACHE_ROOT, projectId, audioFile);
-            }
         }
 
         // Quick nVoice health check before attempting alignment
@@ -937,14 +884,8 @@ app.post('/api/render-deck/:id', async (req, res) => {
             // Align all slides that have audio but no word timing data
             for (let i = 0; i < deck.slides.length; i++) {
                 const slide = deck.slides[i];
-                const hasTTS = !!slide.tts;
-                const hasError = slide.tts?.error;
-                const hasAudioPath = slide.tts?.audioPath;
-                const audioExists = hasAudioPath ? fs.existsSync(slide.tts.audioPath) : false;
-                const hasWords = slide.tts?.words?.length > 0;
-                console.log(`[Render] Slide ${i}: hasTTS=${hasTTS} hasError=${!!hasError} audioPath=${hasAudioPath} audioExists=${audioExists} hasWords=${hasWords}`);
-                if (!slide.tts || slide.tts.error || !slide.tts.audioPath) continue;
-                if (!fs.existsSync(slide.tts.audioPath)) continue;
+                if (!slide.tts || slide.tts.error || !slide.tts.audioRef) continue;
+                if (!audioExists(slide.tts.audioRef)) continue;
                 if (slide.tts.alignVersion === ALIGNMENT_VERSION && slide.tts.words && slide.tts.words.length > 0) continue;
 
                 alignAttempted++;
@@ -969,9 +910,6 @@ app.post('/api/render-deck/:id', async (req, res) => {
         } else {
             console.log(`[Render] ${reRendered} generated, ${cached} cached. nVoice unavailable — skipping alignment.`);
         }
-
-        // Save updated deck with alignment data to render cache
-        fs.writeFileSync(deckPath, JSON.stringify(deck, null, 2), 'utf-8');
 
         // Persist rendered deck metadata back to nDB so render page shows correct state
         if (db) {
@@ -1015,10 +953,6 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         const controller = new AbortController();
         renderControllers.set(projectId, controller);
 
-        const cacheDir = getProjectCacheDir(projectId);
-        const projectPath = path.join(cacheDir, 'project_v3.json');
-        fs.mkdirSync(cacheDir, { recursive: true });
-
         const targets = req.body.targets;
         const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
 
@@ -1031,6 +965,7 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
 
         let processedCount = 0;
         let renderedCount = 0;
+        let alignSucceeded = 0;
         let stopped = false;
 
         writeRenderProgress(projectId, 'render', 'Starting render...', 0);
@@ -1048,7 +983,7 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
                 }
 
                 processedCount++;
-                const result = await renderParagraph(project, msgIdx, paraIdx, cacheDir, nVoiceAvailable);
+                const result = await renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable);
                 if (result.rendered) renderedCount++;
                 if (result.aligned) alignSucceeded++;
 
@@ -1064,7 +999,6 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
 
                 // Persist intermediate state so the UI can refresh status dots.
                 if (processedCount % 10 === 0) {
-                    fs.writeFileSync(projectPath, JSON.stringify(project, null, 2), 'utf-8');
                     if (db) {
                         const existing = db.get(projectId);
                         if (existing) {
@@ -1082,32 +1016,6 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
             }
         }
 
-        // Garbage-collect orphaned audio files: any file whose hash no longer
-        // matches a current paragraph's render hash is deleted.
-        const validHashes = new Set();
-        for (let msgIdx = 0; msgIdx < project.messages.length; msgIdx++) {
-            const msg = project.messages[msgIdx];
-            const role = msg.speaker || 'narrator';
-            const voiceConfig = project.voiceMapping?.[role] || project.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
-            for (let paraIdx = 0; paraIdx < msg.paragraphs.length; paraIdx++) {
-                const para = msg.paragraphs[paraIdx];
-                if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
-                validHashes.add(computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed));
-            }
-        }
-        if (fs.existsSync(cacheDir)) {
-            for (const file of fs.readdirSync(cacheDir)) {
-                if (!file.endsWith('.mp3')) continue;
-                const hashMatch = file.match(/_([a-f0-9]{16})\.mp3$/);
-                if (hashMatch && !validHashes.has(hashMatch[1])) {
-                    fs.unlinkSync(path.join(cacheDir, file));
-                }
-            }
-        }
-
-        // Save final state with alignment data
-        fs.writeFileSync(projectPath, JSON.stringify(project, null, 2), 'utf-8');
-
         // Persist to nDB
         if (db) {
             const existing = db.get(projectId);
@@ -1122,6 +1030,11 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
                 });
             }
         }
+
+        // Garbage-collect orphaned audio via nDB's bucket GC.
+        // Must run AFTER db.update() so newly-referenced files are
+        // visible in the persisted documents and don't get trashed.
+        gcAudio();
 
         renderControllers.delete(projectId);
 
@@ -1168,9 +1081,6 @@ app.post('/api/v3/render-message/:id/:msgIdx', async (req, res) => {
         const msg = doc.messages?.[msgIdx];
         if (!msg) return res.status(400).json({ error: `Invalid message index: ${msgIdx}` });
 
-        const cacheDir = getProjectCacheDir(projectId);
-        const projectPath = path.join(cacheDir, 'project_v3.json');
-
         let nVoiceAvailable = false;
         try {
             const nvRes = await fetch(getSettings().nvoiceUrl, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
@@ -1184,13 +1094,15 @@ app.post('/api/v3/render-message/:id/:msgIdx', async (req, res) => {
             const para = msg.paragraphs[paraIdx];
             if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
 
-            const result = await renderParagraph(doc, msgIdx, paraIdx, cacheDir, nVoiceAvailable);
+            // Force re-render on explicit per-message click: even if
+            // the paragraph is already fresh, the user asked for it.
+            const result = await renderParagraph(doc, msgIdx, paraIdx, nVoiceAvailable, { force: true });
             if (result.rendered) renderedCount++;
             if (result.aligned) alignSucceeded++;
         }
 
-        fs.writeFileSync(projectPath, JSON.stringify(doc, null, 2), 'utf-8');
         db.update(projectId, { ...doc, updatedAt: Date.now() });
+        gcAudio();
 
         console.log(`[v3 Render] Message ${msgIdx} complete for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned`);
         res.json({ message: msg, renderedCount, alignSucceeded });
@@ -1218,18 +1130,17 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
         const para = msg.paragraphs?.[pi];
         if (!para) return res.status(400).json({ error: `Invalid paragraph index: ${pi}` });
 
-        const cacheDir = getProjectCacheDir(projectId);
         const role = msg.speaker || 'narrator';
         const voiceConfig = doc.voiceMapping?.[role] || doc.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
         const renderHash = computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed);
-        const audioFile = `msg_${mi}_p_${pi}_${renderHash}.mp3`;
-        const audioPath = path.join(cacheDir, audioFile);
-        const audioUrl = `/cache/audio/${projectId}/${audioFile}`;
 
         // Generate TTS
         console.log(`[v3 Render] Re-rendering msg${mi}/p${pi}...`);
+        // Strip *emphasis* markers via the shared speakText() helper.
+        // On-screen para.text keeps the marks; only TTS text is cleaned.
+        const spokenText = speakText(para.text);
         const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
-            text: para.text,
+            text: spokenText,
             voice_name: voiceConfig.voice,
             speed: (voiceConfig.speed || 1.0).toString(),
             output_format: 'mp3'
@@ -1241,15 +1152,16 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
         }
 
         const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
-        fs.writeFileSync(audioPath, audioBuffer);
+        const { audioRef, audioUrl, byteLength } = storeAudio(
+            `msg_${mi}_p_${pi}_${renderHash}.mp3`, audioBuffer
+        );
 
-        para.audioFile = audioFile;
-        para.audioPath = audioPath;
+        para.audioRef = audioRef;
         para.audioUrl = audioUrl;
         para.renderHash = renderHash;
         para.voice = voiceConfig.voice;
         para.speed = voiceConfig.speed;
-        para.byteLength = audioBuffer.length;
+        para.byteLength = byteLength;
 
         // Clear old alignment data
         delete para.words;
@@ -1281,15 +1193,12 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
             }
         }
 
-        // Save updated project
-        const projectPath = path.join(cacheDir, 'project_v3.json');
-        fs.writeFileSync(projectPath, JSON.stringify(doc, null, 2), 'utf-8');
-
         // Update nDB
         db.update(projectId, {
             ...doc,
             updatedAt: Date.now()
         });
+        gcAudio();
 
         res.json(para);
     } catch (err) {
@@ -1336,23 +1245,8 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
         const voiceConfig = deck.voiceMapping[role] || deck.voiceMapping.narrator || { voice: 'en-US-Male', speed: 1.0 };
         const renderHash = computeRenderHash(text, voiceConfig.voice, voiceConfig.speed);
 
-        const cacheMeta = getSlideCacheMeta(projectId);
-        const cacheDir = getProjectCacheDir(projectId);
-        const audioPath = getSlideAudioPath(projectId, slideIdx, renderHash);
-        const audioUrl = `/cache/audio/${projectId}/slide_${String(slideIdx).padStart(3, '0')}_${renderHash}.mp3`;
-        const deckPath = path.join(cacheDir, 'deck.json');
-
-        // Load existing cache for alignment preservation
-        let existingSlide = null;
-        if (fs.existsSync(deckPath)) {
-            try {
-                const cached = JSON.parse(fs.readFileSync(deckPath, 'utf-8'));
-                existingSlide = cached.slides?.[slideIdx];
-            } catch {}
-        }
-
-        // Check audio cache hit (reuse existing TTS audio if hash matches)
-        const audioCached = cacheMeta[slideIdx] === renderHash && fs.existsSync(audioPath);
+        // Cache hit: audioRef exists and hash matches.
+        const audioCached = slide.tts?.audioRef && slide.tts.renderHash === renderHash && audioExists(slide.tts.audioRef);
 
         if (!audioCached) {
             // Generate TTS
@@ -1368,50 +1262,21 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
             }
 
             const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
-            fs.writeFileSync(audioPath, audioBuffer);
+            const { audioRef, audioUrl, byteLength } = storeAudio(
+                `slide_${String(slideIdx).padStart(3, '0')}_${renderHash}.mp3`, audioBuffer
+            );
 
             slide.tts = {
-                audioFile: path.basename(audioPath),
-                audioPath,
+                audioRef,
                 audioUrl,
                 voice: voiceConfig.voice,
                 speed: voiceConfig.speed,
-                byteLength: audioBuffer.length,
+                byteLength,
                 renderHash
             };
-
-            cacheMeta[slideIdx] = renderHash;
-            setSlideCacheMeta(projectId, cacheMeta);
         } else {
-            // Audio cache hit — reuse, but check for alignment data
-            slide.tts = {
-                audioFile: path.basename(audioPath),
-                audioPath,
-                audioUrl,
-                voice: voiceConfig.voice,
-                speed: voiceConfig.speed,
-                renderHash,
-                cached: true,
-                ...(existingSlide?.tts?.renderHash === renderHash && existingSlide.tts.alignVersion === ALIGNMENT_VERSION && existingSlide.tts.words ? {
-                    words: existingSlide.tts.words,
-                    segments: existingSlide.tts.segments,
-                    durationMs: existingSlide.tts.durationMs,
-                    alignComplete: existingSlide.tts.alignComplete,
-                    sourceWordCount: existingSlide.tts.sourceWordCount,
-                    alignedWordCount: existingSlide.tts.alignedWordCount,
-                    alignVersion: existingSlide.tts.alignVersion,
-                } : {})
-            };
+            slide.tts.cached = true;
         }
-
-        // Save deck checkpoint
-        if (!fs.existsSync(deckPath)) {
-            fs.writeFileSync(deckPath, JSON.stringify({ slides: [] }, null, 2), 'utf-8');
-        }
-        const cachedDeck = JSON.parse(fs.readFileSync(deckPath, 'utf-8'));
-        if (!cachedDeck.slides) cachedDeck.slides = [];
-        cachedDeck.slides[slideIdx] = structuredClone(slide);
-        fs.writeFileSync(deckPath, JSON.stringify(cachedDeck, null, 2), 'utf-8');
 
         // Run alignment (always, unless words are already present and fresh)
         const needsAlignment = slide.tts.alignVersion !== ALIGNMENT_VERSION || !slide.tts.words || slide.tts.words.length === 0;
@@ -1422,7 +1287,7 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
             nVoiceAvailable = nvRes.ok;
         } catch {}
 
-        if (needsAlignment && nVoiceAvailable && slide.tts.audioPath && fs.existsSync(slide.tts.audioPath)) {
+        if (needsAlignment && nVoiceAvailable && slide.tts.audioRef) {
             try {
                 const alignRes = await alignSingleSlide(slide, slideIdx);
                 if (alignRes) {
@@ -1441,11 +1306,6 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
             }
         }
 
-        // Save final deck to cache
-        const finalDeck = JSON.parse(fs.readFileSync(deckPath, 'utf-8'));
-        finalDeck.slides[slideIdx] = structuredClone(slide);
-        fs.writeFileSync(deckPath, JSON.stringify(finalDeck, null, 2), 'utf-8');
-
         // Update nDB
         const existing = db.get(projectId);
         if (existing) {
@@ -1453,6 +1313,7 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
             existing.updatedAt = Date.now();
             db.update(projectId, existing);
         }
+        gcAudio();
 
         res.json({ slideIdx, slide });
     } catch (err) {
@@ -1464,9 +1325,9 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
 async function alignSingleSlide(slide, slideIndex) {
     const text = getSpokenText(slide);
     if (!text.trim()) return null;
-    if (!slide.tts || !slide.tts.audioPath) return null;
+    if (!slide.tts || !slide.tts.audioRef) return null;
 
-    const audioBuffer = fs.readFileSync(slide.tts.audioPath);
+    const audioBuffer = readAudio(slide.tts.audioRef);
     const url = `${getSettings().nvoiceUrl}/align?text=${encodeURIComponent(text)}`;
 
     const controller = new AbortController();
@@ -1547,11 +1408,11 @@ async function alignSingleSlide(slide, slideIndex) {
 async function alignParagraph(paragraph, msgIdx, paraIdx) {
     const text = paragraph.text;
     if (!text || !text.trim()) return null;
-    if (!paragraph.audioPath || !fs.existsSync(paragraph.audioPath)) return null;
+    if (!paragraph.audioRef || !audioExists(paragraph.audioRef)) return null;
 
     // Strip *emphasis* markers for alignment
     const spokenText = text.replace(/\*([^*]+)\*/g, '$1');
-    const audioBuffer = fs.readFileSync(paragraph.audioPath);
+    const audioBuffer = readAudio(paragraph.audioRef);
     const url = `${getSettings().nvoiceUrl}/align?text=${encodeURIComponent(spokenText)}`;
 
     const controller = new AbortController();
@@ -1614,11 +1475,9 @@ app.post('/api/tts-preview', async (req, res) => {
         const { text, voice, speed } = req.body;
         if (!text) return res.status(400).json({ error: 'Missing text' });
 
-        // Strip *emphasis* markers from the preview text so what the
-        // user hears matches what the deck's rendered TTS will say.
-        // Same rule as getSpokenText in the per-slide render path.
-        const spokenText = String(text).replace(/\*+/g, '');
-
+        // Strip *emphasis* markers via the shared speakText() helper so
+        // the preview matches what the deck's rendered TTS will say.
+        const spokenText = speakText(text);
         const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
             text: spokenText,
             voice_name: voice || 'en-US-Male',
@@ -1681,7 +1540,20 @@ app.use('/nui', express.static(path.join(__dirname, '../modules/nui_wc2/NUI')));
 app.use('/modules', express.static(path.join(__dirname, '../modules')));
 
 // Serve render cache audio files
-app.use('/cache/audio', express.static(RENDER_CACHE_ROOT));
+// Serve rendered audio from the nDB file bucket. The URL format
+// /audio/:bucket/:id.:ext matches the audioUrl stored on paragraphs
+// and slides. The bucket stores files by SHA-256 content hash.
+app.get('/audio/:bucket/:id.:ext', (req, res) => {
+    try {
+        const { bucket, id, ext } = req.params;
+        const buffer = db.getFile(bucket, id, ext);
+        res.setHeader('Content-Type', 'audio/mpeg');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.send(buffer);
+    } catch (err) {
+        res.status(404).json({ error: 'Audio not found' });
+    }
+});
 
 // Serve pipeline output for playback testing
 app.use('/pipeline', express.static(path.join(__dirname, '../pipeline')));
@@ -1690,7 +1562,7 @@ app.use('/pipeline', express.static(path.join(__dirname, '../pipeline')));
 app.use((req, res) => {
     const p = req.path;
     // Don't serve index.html for API calls or file assets
-    if (p.startsWith('/api/') || p.startsWith('/cache/') || p.startsWith('/pipeline/') ||
+    if (p.startsWith('/api/') || p.startsWith('/audio/') || p.startsWith('/cache/') || p.startsWith('/pipeline/') ||
         p.startsWith('/pages/') || p.startsWith('/js/') || p.startsWith('/css/') ||
         p.startsWith('/nui/') || p.startsWith('/modules/') || p === '/config.js') {
         return res.status(404).json({ error: 'Not found' });

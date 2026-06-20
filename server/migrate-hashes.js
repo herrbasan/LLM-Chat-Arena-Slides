@@ -5,8 +5,10 @@ const nDB = require('../modules/nDB/napi');
 const dbPath = path.join(__dirname, 'data');
 const db = nDB.Database.open(path.join(dbPath, 'slideshows.jsonl'), { persistence: 'immediate' });
 
+const { speakText } = require('../pipeline/speak-text.js');
+
 function getSpokenText(text) {
-    return text ? text.toString().replace(/\*+/g, '') : '';
+    return speakText(text);
 }
 
 function computeRenderHash(text, voice, speed) {

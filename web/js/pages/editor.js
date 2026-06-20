@@ -199,7 +199,7 @@ nui.registerPage('editor', {
                             </div>
                             <div class="slide-card-actions">
                                 <nui-button variant="icon" data-action="play-slide:${idx}" title="Preview TTS">
-                                    <button type="button" aria-label="Preview TTS"><nui-icon name="play"></nui-icon></button>
+                                    <button type="button" aria-label="Preview TTS"><nui-icon name="volume"></nui-icon></button>
                                 </nui-button>
                                 <nui-button variant="icon" data-action="delete-slide:${idx}" title="Delete">
                                     <button type="button" aria-label="Delete slide"><nui-icon name="delete"></nui-icon></button>
@@ -271,6 +271,11 @@ nui.registerPage('editor', {
                                     <strong>Message ${msgIdx + 1}</strong>
                                     <span class="slide-card-index">${paras.length} paragraphs</span>
                                 </div>
+                                <div class="slide-card-actions">
+                                    <nui-button variant="outline" data-action="edit-message:${msgIdx}" title="Edit paragraphs (join / split)">
+                                        <button type="button">Edit</button>
+                                    </nui-button>
+                                </div>
                             </div>
                             <div class="editor-paragraphs">
                                 ${paras.map((para, paraIdx) => {
@@ -279,7 +284,10 @@ nui.registerPage('editor', {
                                     const statusClass = hasWords ? 'status-aligned' : (hasAudio ? 'status-audio' : 'status-unrendered');
                                     return `
                                         <div class="editor-paragraph ${paraIdx > 0 ? 'editor-paragraph-sep' : ''}">
-                                            <span class="editor-paragraph-status ${statusClass}" title="${hasWords ? 'aligned' : (hasAudio ? 'audio only' : 'unrendered')}"></span>
+                                            <div class="editor-paragraph-status ${statusClass}" title="${hasWords ? 'aligned' : (hasAudio ? 'audio only' : 'unrendered')}"></div>
+                                            <nui-button variant="icon" data-action="play-paragraph:${msgIdx}:${paraIdx}" title="Preview TTS">
+                                                <button type="button" aria-label="Preview TTS"><nui-icon name="volume"></nui-icon></button>
+                                            </nui-button>
                                             <span class="editor-paragraph-text">${escapeHtml(para.text || '').substring(0, 200)}${(para.text || '').length > 200 ? '…' : ''}</span>
                                         </div>
                                     `;
@@ -312,6 +320,26 @@ nui.registerPage('editor', {
             return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
         }
 
+        // ─── Busy Overlay ────────────────────────────────────
+        // Blocks all interaction with the app while a long operation
+        // (generation) runs. No progress data — just a busy spinner.
+        // Uses <nui-loading mode="overlay">, toggled via `active`.
+        // Returns { el, updateText, remove }.
+        function showBusyOverlay(text) {
+            const el = document.createElement('nui-loading');
+            el.setAttribute('mode', 'overlay');
+            el.setAttribute('active', '');
+            document.body.appendChild(el);
+            return {
+                el,
+                updateText(t) {
+                    const label = el.querySelector('.loading-text');
+                    if (label) label.textContent = t || 'Loading...';
+                },
+                remove() { el.remove(); }
+            };
+        }
+
         // ─── Save Deck ───────────────────────────────────────
         async function saveDeck() {
             try {
@@ -323,6 +351,151 @@ nui.registerPage('editor', {
             } catch (e) {
                 console.error('Save failed:', e);
             }
+        }
+
+        // ─── Edit Message Dialog ───────────────────────────
+        // Opens a nui-dialog (page mode) with one <textarea> per
+        // paragraph. Operations:
+        //   - Join with previous: merges paragraph N's text into N-1
+        //     by concatenating with the same '\n\n' separator the
+        //     splitter uses, then removes N.
+        //   - Split here: inserts an empty paragraph after N so the
+        //     user can split a long paragraph manually.
+        // Save commits the new paragraphs array, persists via saveDeck,
+        // and re-renders. Cancel discards.
+        async function openEditMessageDialog(msgIdx) {
+            const msg = deck.messages[msgIdx];
+            if (!msg) return;
+            const speaker = msg.label || msg.originalSpeaker || msg.speaker || 'unknown';
+            const initialParas = (msg.paragraphs || []).map(p => ({ text: p.text || '' }));
+
+            function buildDialogHtml(paras) {
+                return paras.map((p, i) => `
+                    <div class="edit-msg-paragraph" data-edit-para="${i}">
+                        <div class="edit-msg-paragraph-header">
+                            <strong>Paragraph ${i + 1}</strong>
+                            <div class="edit-msg-paragraph-actions">
+                                ${i > 0 ? `<nui-button variant="ghost" data-action="edit-join-prev:${i}"><button type="button">Join with previous</button></nui-button>` : ''}
+                                <nui-button variant="ghost" data-action="edit-split-at-cursor:${i}"><button type="button" title="Place cursor where you want to split, then click">Split at cursor</button></nui-button>
+                            </div>
+                        </div>
+                        <nui-textarea auto-resize>
+                            <textarea data-edit-text="${i}" rows="4" style="white-space: pre-wrap;">${escapeHtml(p.text)}</textarea>
+                        </nui-textarea>
+                    </div>
+                `).join('');
+            }
+
+            // Working copy. We re-render the dialog body whenever the
+            // paragraphs array mutates (join/split) so the indices stay
+            // consistent.
+            let working = initialParas.map(p => ({ ...p }));
+
+            const { dialog, main, result } = await nui.components.dialog.page(
+                `Edit message ${msgIdx + 1} — ${speaker}`,
+                `<div class="edit-msg-list">${buildDialogHtml(working)}</div>
+                 <p class="edit-msg-hint">Edits invalidate the cached audio; you'll need to re-render this message after saving.</p>`,
+                {
+                    buttons: [
+                        { label: 'Cancel', value: 'cancel', type: 'outline' },
+                        { label: 'Save', value: 'save', type: 'primary' }
+                    ],
+                    placement: 'top'
+                }
+            );
+
+            // Wire up the per-paragraph controls. Bound on every
+            // re-render so join/split clicks always act on fresh DOM.
+            // We scope queries to `main` — that's the content root
+            // returned by dialog.page(), not the <nui-dialog> wrapper.
+            function bindControls() {
+                main.querySelectorAll('[data-action^="edit-join-prev:"]').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const i = parseInt(btn.dataset.action.split(':')[1], 10);
+                        if (i < 1 || i >= working.length) return;
+                        // Join: concat working[i].text onto working[i-1]
+                        // with the same \n\n separator the splitter
+                        // expects, then remove working[i].
+                        working[i - 1].text = working[i - 1].text + '\n\n' + working[i].text;
+                        working.splice(i, 1);
+                        rerenderDialog();
+                    });
+                });
+                main.querySelectorAll('[data-action^="edit-split-at-cursor:"]').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const i = parseInt(btn.dataset.action.split(':')[1], 10);
+                        // Split the paragraph at the textarea's current
+                        // cursor position. If nothing is selected, fall
+                        // back to the middle of the text. The user can
+                        // click into the textarea first to choose where
+                        // to split.
+                        const ta = main.querySelector(`textarea[data-edit-text="${i}"]`);
+                        const original = working[i].text || '';
+                        let splitAt;
+                        if (ta && typeof ta.selectionStart === 'number' && ta.selectionStart > 0 && ta.selectionStart < original.length) {
+                            splitAt = ta.selectionStart;
+                        } else if (original.length > 1) {
+                            splitAt = Math.floor(original.length / 2);
+                        } else {
+                            return; // nothing to split
+                        }
+                        const before = original.slice(0, splitAt).trimEnd();
+                        const after = original.slice(splitAt).trimStart();
+                        if (!after) return; // cursor was at the end
+                        working.splice(i, 1, { text: before }, { text: after });
+                        rerenderDialog();
+                    });
+                });
+            }
+
+            function rerenderDialog() {
+                main.innerHTML = buildDialogHtml(working)
+                    + `<p class="edit-msg-hint">Edits invalidate the cached audio; you'll need to re-render this message after saving.</p>`;
+                bindControls();
+            }
+
+            bindControls();
+
+            // Pull the latest textarea values into `working` before
+            // reading the dialog result, so unsaved edits aren't lost.
+            function snapshotTextareas() {
+                main.querySelectorAll('[data-edit-text]').forEach(ta => {
+                    const i = parseInt(ta.dataset.editText, 10);
+                    if (working[i]) working[i].text = ta.value;
+                });
+            }
+
+            const choice = await result;
+            if (choice !== 'save') return;
+            snapshotTextareas();
+
+            // Strip out any paragraphs the user emptied — easier than
+            // asking them to hit a delete button. An empty paragraph
+            // produces 0-byte audio and breaks alignment anyway.
+            const cleaned = working.map(p => p.text).filter(t => t && t.trim().length > 0);
+            if (cleaned.length === 0) {
+                nui.components.banner.show({
+                    content: 'All paragraphs are empty — discarding message.',
+                    priority: 'warning',
+                    autoClose: 3000
+                });
+                deck.messages.splice(msgIdx, 1);
+            } else {
+                // Reset paragraphs to the new array. Clear the cached
+                // TTS / alignment data — the user will have to
+                // re-render the affected paragraphs, but we don't
+                // silently leave stale audio playing.
+                msg.paragraphs = cleaned.map(text => ({ text }));
+                msg.text = cleaned.join('\n\n');
+            }
+
+            await saveDeck();
+            renderSlides();
+            nui.components.banner.show({
+                content: 'Message updated.',
+                priority: 'success',
+                autoClose: 2000
+            });
         }
 
         // ─── Chat / LLM Integration ──────────────────────────
@@ -529,7 +702,8 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
             if (!actionEl) return;
             const actionSpec = actionEl.dataset.action;
             const [actionPart] = actionSpec.split('@');
-            const [action, param] = actionPart.split(':');
+            const [action, ...paramParts] = actionPart.split(':');
+            const param = paramParts.join(':');
 
             if (action === 'generate-deck') {
                 if (isV3) {
@@ -543,7 +717,11 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                         if (!ok) return;
                     }
                     actionEl.setLoading?.(true);
-                    let progressBanner = nui.components.banner.show({ content: 'Generating…', priority: 'info' });
+                    // Simple blocking overlay — no real progress data,
+                    // just keep the user from touching the app while
+                    // generation runs so results can't overwrite
+                    // in-flight edits.
+                    const overlay = showBusyOverlay('Generating messages…');
                     try {
                         // Re-import from source to regenerate. The source
                         // payload must include the original message-level
@@ -570,12 +748,11 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                         deck.voiceMapping = { ...deck.voiceMapping, ...generated.voiceMapping };
                         await saveDeck();
                         renderSlides();
-                        progressBanner.close();
                         nui.components.banner.show({ content: `Generated ${deck.messages.length} messages`, priority: 'success', autoClose: 3000 });
                     } catch (err) {
-                        try { progressBanner.close(); } catch {}
                         nui.components.banner.show({ content: 'Generation failed: ' + err.message, priority: 'alert', autoClose: 5000 });
                     } finally {
+                        overlay.remove();
                         actionEl.setLoading?.(false);
                     }
                 } else {
@@ -594,11 +771,9 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                 }
                 actionEl.setLoading?.(true);
 
-                // Show a progress banner that we'll update as SSE events arrive.
-                let progressBanner = nui.components.banner.show({
-                    content: 'Generating… 0%',
-                    priority: 'info'
-                });
+                // Simple blocking overlay — prevents editing during
+                // generation so results can't overwrite in-flight edits.
+                const overlay = showBusyOverlay('Generating slides…');
 
                 try {
                     const res = await fetch('/api/generate-deck', {
@@ -649,10 +824,8 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
 
                             if (eventName === 'progress') {
                                 const pct = Math.round(data.pct || 0);
-                                progressBanner.update(`${data.message || data.stage} (${pct}%)`);
-                                // Yield to the browser so the banner repaints.
-                                // Without this, rapid SSE events all arrive in one
-                                // chunk and the user sees 0% until done.
+                                overlay.updateText(`${data.message || data.stage} (${pct}%)`);
+                                // Yield to the browser so the overlay repaints.
                                 await new Promise(r => setTimeout(r, 0));
                             } else if (eventName === 'done') {
                                 // Server has finished; the 'result' event will follow
@@ -665,8 +838,6 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                         }
                     }
 
-                    progressBanner.close();
-
                     if (lastErr) throw lastErr;
                     if (!generated) throw new Error('Generation finished without a result');
 
@@ -676,9 +847,9 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                     renderSlides();
                     nui.components.banner.show({ content: `Generated ${deck.slides.length} slides`, priority: 'success', autoClose: 3000 });
                 } catch (err) {
-                    try { progressBanner.close(); } catch {}
                     nui.components.banner.show({ content: 'Generation failed: ' + err.message, priority: 'alert', autoClose: 5000 });
                 } finally {
+                    overlay.remove();
                     actionEl.setLoading?.(false);
                 }
                 } // end v2 generate-deck else block
@@ -723,7 +894,17 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                 if (!slide) return;
                 const text = slide.text || slide.narration || '';
                 const roleCfg = deck.voiceMapping[slide.speaker] || deck.voiceMapping.narrator || {};
-                previewTts(text, roleCfg.voice, roleCfg.speed);
+                previewTts(text, roleCfg.voice, roleCfg.speed, actionEl);
+            }
+
+            if (action === 'play-paragraph') {
+                const [msgIdx, paraIdx] = param.split(':').map(n => parseInt(n, 10));
+                const msg = deck.messages?.[msgIdx];
+                const para = msg?.paragraphs?.[paraIdx];
+                if (!para) return;
+                const role = msg.speaker || 'narrator';
+                const roleCfg = deck.voiceMapping?.[role] || deck.voiceMapping?.narrator || {};
+                previewTts(para.text || '', roleCfg.voice, roleCfg.speed, actionEl);
             }
 
             if (action === 'delete-slide') {
@@ -734,6 +915,13 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                     renderSlides();
                 }
             }
+
+            if (action === 'edit-message') {
+                const idx = parseInt(param, 10);
+                if (isV3 && deck.messages && deck.messages[idx]) {
+                    openEditMessageDialog(idx);
+                }
+            }
         });
 
         chatInput?.addEventListener('keydown', (e) => {
@@ -741,65 +929,73 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
         });
 
         // ─── TTS Preview ──────────────────────────────────────
+        // Talks directly to nSpeech from the browser — no server proxy.
+        // Same pattern as LLM Gateway Chat: new Audio(url) and play.
+        // Clicking the same button again stops playback and restores
+        // the volume icon.
         let previewAudio = null;
-        let previewMediaSource = null;
+        let previewButton = null;
+        let cachedNspeechUrl = null;
 
-        async function previewTts(text, voice, speed) {
+        async function getNspeechUrl() {
+            if (cachedNspeechUrl) return cachedNspeechUrl;
+            try {
+                const res = await fetch('/api/settings');
+                const settings = res.ok ? await res.json() : {};
+                cachedNspeechUrl = settings.nspeechUrl || 'http://localhost:2233';
+            } catch {
+                cachedNspeechUrl = 'http://localhost:2233';
+            }
+            return cachedNspeechUrl;
+        }
+
+        // Browser-side mirror of pipeline/speak-text.js speakText().
+        function speakText(s) {
+            return String(s || '')
+                .replace(/\*+([^*]+?)\*+/g, '($1)')
+                .replace(/\*+/g, '');
+        }
+
+        function resetPreviewButton() {
+            if (previewButton) {
+                const icon = previewButton.querySelector('nui-icon');
+                if (icon) icon.setAttribute('name', 'volume');
+                previewButton = null;
+            }
+        }
+
+        function stopTts() {
             if (previewAudio) { previewAudio.pause(); previewAudio.src = ''; previewAudio = null; }
-            if (previewMediaSource) { try { previewMediaSource.endOfStream(); } catch {} previewMediaSource = null; }
+            resetPreviewButton();
+        }
+
+        async function previewTts(text, voice, speed, btnEl) {
+            // If clicking the button that's already playing, stop.
+            if (previewButton === btnEl) { stopTts(); return; }
+            // Stop any previous playback + reset its button.
+            stopTts();
 
             try {
-                const res = await fetch('/api/tts-preview', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text, voice, speed })
-                });
-                if (!res.ok) throw new Error('TTS preview failed');
+                const endpoint = await getNspeechUrl();
+                const spoken = speakText(text);
+                const url = `${endpoint}/tts?` + new URLSearchParams({
+                    text: spoken,
+                    voice_name: voice || '',
+                    speed: (speed || 1.0).toString(),
+                    output_format: 'mp3'
+                }).toString();
 
-                const mime = 'audio/mpeg';
-                const canStream = window.MediaSource && MediaSource.isTypeSupported(mime);
+                previewAudio = new Audio(url);
+                previewAudio.preload = 'auto';
+                previewAudio.onended = () => stopTts();
+                previewAudio.onerror = () => stopTts();
 
-                if (canStream) {
-                    const mediaSource = new MediaSource();
-                    previewMediaSource = mediaSource;
-                    const url = URL.createObjectURL(mediaSource);
-                    previewAudio = new Audio(url);
-                    let pumping = true; // shared with the pump loop + ended listener
+                // Swap icon to close so the user can stop playback.
+                previewButton = btnEl;
+                const icon = btnEl.querySelector('nui-icon');
+                if (icon) icon.setAttribute('name', 'close');
 
-                    mediaSource.addEventListener('sourceopen', async () => {
-                        const sourceBuffer = mediaSource.addSourceBuffer(mime);
-                        const reader = res.body.getReader();
-
-                        async function pump() {
-                            if (!pumping) return;
-                            try {
-                                const { done, value } = await reader.read();
-                                if (done || !mediaSource || mediaSource.readyState === 'closed') {
-                                    if (mediaSource && mediaSource.readyState === 'open') mediaSource.endOfStream();
-                                    return;
-                                }
-                                if (sourceBuffer.updating) {
-                                    sourceBuffer.addEventListener('updateend', () => pump(), { once: true });
-                                } else {
-                                    sourceBuffer.appendBuffer(value);
-                                    sourceBuffer.addEventListener('updateend', () => pump(), { once: true });
-                                }
-                            } catch (e) {
-                                console.error('[TTS Preview] Stream error:', e);
-                                if (mediaSource && mediaSource.readyState === 'open') mediaSource.endOfStream('decode');
-                            }
-                        }
-                        pump();
-                    }, { once: true });
-
-                    previewAudio.play().catch(() => {});
-                    previewAudio.addEventListener('ended', () => { pumping = false; });
-                } else {
-                    const blob = await res.blob();
-                    const url = URL.createObjectURL(blob);
-                    previewAudio = new Audio(url);
-                    previewAudio.play();
-                }
+                previewAudio.play().catch(() => stopTts());
             } catch (err) {
                 nui.components.banner.show({ content: 'TTS preview failed: ' + err.message, priority: 'alert', autoClose: 3000 });
             }

@@ -23,6 +23,8 @@ const ALIGNMENT_VERSION = 6;
 
 // ─── Helpers ──────────────────────────────────────────────────
 
+const { speakText } = require('./speak-text.js');
+
 function getSlideText(slide) {
     let text;
     if (slide.type === 'title' || slide.type === 'end') {
@@ -30,15 +32,13 @@ function getSlideText(slide) {
     } else {
         text = slide.text || slide.narration || '';
     }
-    // Strip markdown *emphasis* markers from spoken text. nVoice alignment
-    // uses this as endpoint context and would otherwise see literal
-    // "asterisk" tokens. Mirrors the server-side fix in server/server.js.
-    return text ? text.toString().replace(/\*+/g, '') : text;
+    // Strip *emphasis* markers via the shared speakText() helper. nVoice
+    // alignment uses this as endpoint context.
+    return speakText(text);
 }
 
 function getSpokenText(text) {
-    if (!text) return '';
-    return text.toString().replace(/\*+/g, '');
+    return speakText(text);
 }
 
 function normalizeWord(w) {
