@@ -208,6 +208,29 @@ function gcAudio() {
     }
 }
 
+// Check nVoice availability via the /health endpoint (added 2026-06-21).
+// Falls back to the root URL for older nVoice versions without /health.
+async function checkNVoiceAvailable() {
+    const base = getSettings().nvoiceUrl;
+    try {
+        const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
+        if (res.ok) return true;
+        // 503 = model still loading
+        if (res.status === 503) {
+            console.warn('[nVoice] Model still loading (503 from /health)');
+        }
+        return false;
+    } catch {
+        // Fallback: try root URL for older nVoice versions without /health
+        try {
+            const res = await fetch(base, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
+            return res.ok;
+        } catch {
+            return false;
+        }
+    }
+}
+
 function getProjectRenderProgressPath(projectId) {
     return path.join(RENDER_PROGRESS_ROOT, `${projectId}.json`);
 }
@@ -366,7 +389,7 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
                 }
                 const retryable = err.message?.includes('no segments') ||
                                   err.message?.includes('no words') ||
-                                  err.message?.includes('nVoice alignment failed') ||
+                                  err.message?.includes('nVoice alignment failed: HTTP 5') ||
                                   err.message?.includes('timed out') ||
                                   err.message?.includes('network');
                 para.alignError = err.message;
@@ -957,11 +980,7 @@ app.post('/api/render-deck/:id', async (req, res) => {
         }
 
         // Quick nVoice health check before attempting alignment
-        let nVoiceAvailable = false;
-        try {
-            const nvRes = await fetch(getSettings().nvoiceUrl, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
-            nVoiceAvailable = nvRes.ok;
-        } catch { /* nVoice not available */ }
+        const nVoiceAvailable = await checkNVoiceAvailable();
 
         if (nVoiceAvailable) {
             console.log(`[Render] ${reRendered} generated, ${cached} cached. Running alignment...`);
@@ -1055,11 +1074,7 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
 
         // Check nVoice availability once up front.
-        let nVoiceAvailable = false;
-        try {
-            const nvRes = await fetch(getSettings().nvoiceUrl, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
-            nVoiceAvailable = nvRes.ok;
-        } catch {}
+        const nVoiceAvailable = await checkNVoiceAvailable();
 
         let processedCount = 0;
         let renderedCount = 0;
@@ -1211,11 +1226,7 @@ app.post('/api/v3/render-message/:id/:msgIdx', async (req, res) => {
         const msg = doc.messages?.[msgIdx];
         if (!msg) return res.status(400).json({ error: `Invalid message index: ${msgIdx}` });
 
-        let nVoiceAvailable = false;
-        try {
-            const nvRes = await fetch(getSettings().nvoiceUrl, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
-            nVoiceAvailable = nvRes.ok;
-        } catch {}
+        const nVoiceAvailable = await checkNVoiceAvailable();
 
         let renderedCount = 0;
         let alignSucceeded = 0;
@@ -1301,11 +1312,7 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
         delete para.alignError;
 
         // Run alignment
-        let nVoiceAvailable = false;
-        try {
-            const nvRes = await fetch(getSettings().nvoiceUrl, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
-            nVoiceAvailable = nvRes.ok;
-        } catch {}
+        const nVoiceAvailable = await checkNVoiceAvailable();
 
         if (nVoiceAvailable) {
             try {
@@ -1411,11 +1418,7 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
         // Run alignment (always, unless words are already present and fresh)
         const needsAlignment = slide.tts.alignVersion !== ALIGNMENT_VERSION || !slide.tts.words || slide.tts.words.length === 0;
 
-        let nVoiceAvailable = false;
-        try {
-            const nvRes = await fetch(getSettings().nvoiceUrl, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
-            nVoiceAvailable = nvRes.ok;
-        } catch {}
+        const nVoiceAvailable = await checkNVoiceAvailable();
 
         if (needsAlignment && nVoiceAvailable && slide.tts.audioRef) {
             try {
