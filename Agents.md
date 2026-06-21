@@ -116,7 +116,7 @@ mcp_workshop_tools.call(method="memory.store", payload={
 
 Multiple `memory.store` calls are fine — one per topic. The dreaming system deduplicates and clusters. Prefer workshop docs over the local `documentation` tool's domain files when both are available.
 
-## Verified Project State — 2026-06-20
+## Verified Project State — 2026-06-21
 
 ### Architecture
 - **Deck version:** 3 (`deck.version === 3`). v3 projects store `messages[]` with `paragraphs[]`; virtual slides are built at runtime in `web/js/pages/render.js` (~600 chars per visual chunk).
@@ -135,16 +135,18 @@ Multiple `memory.store` calls are fine — one per topic. The dreaming system de
 - **Editor generation overlay, per-paragraph volume preview, direct nSpeech TTS preview:** Implemented in `web/js/pages/editor.js`.
 - **Unified render status logic:** `computeParagraphStatus()` is the single source of truth for paragraph freshness in `web/js/pages/render.js`.
 
-### v3 Render/Alignment Pipeline — Hardened 2026-06-20
+### v3 Render/Alignment Pipeline — Hardened 2026-06-21
 - **Empty TTS audio is rejected.** `renderParagraph()` retries TTS up to 3 times if nSpeech returns empty audio or transient failures; zero-byte files are no longer stored/aligned.
 - **`audioExists()` checks non-zero byte length.** Prevents stale empty-audio records from looking "fresh".
 - **Alignment uses `speakText()` consistently.** Same normalization as TTS.
-- **Retry for alignment.** Up to 3 attempts for "no segments" / "no words" / network errors.
+- **Retry for alignment.** Up to 3 attempts for "no segments" / "no words" / network errors; 422 ("no speech detected") is not retried.
 - **Abort signal propagation.** `renderParagraph()` and `alignParagraph()` accept an `AbortSignal`; Stop Render now cancels in-flight work.
 - **`/api/v3/render-deck/:id` loads from nDB.** No longer trusts the browser's full project body; only accepts `voiceMapping` and `force`/`targets` intent.
 - **Render summary reports alignment failures.**
 - **Browser status dots show diagnostic tooltips.** e.g. "TTS produced empty audio — retry", "Alignment failed: ...".
-- **Concurrency lowered to 1.** `RENDER_CONCURRENCY=1` in `server/.env.local` because nSpeech (Kokoro) returns empty audio for some requests under concurrent load.
+- **nVoice health checks use `/health`.** `checkNVoiceAvailable()` helper hits `/health` with root-URL fallback; replaces 5 inline health checks.
+- **nSpeech Kokoro thread-safety bug fixed upstream.** Lock was narrowed to voice-state only; ONNX inference runs in parallel. `RENDER_CONCURRENCY=4` restored. Throughput ~17-18 words/s.
+- **nVoice now serves HTTP.** `http://192.168.0.100:2244`. Node v24 `fetch()` ignores `https.Agent({ rejectUnauthorized: false })`; plain HTTP avoids the cert issue entirely.
 
 ### NUI Submodule Patches
 - `modules/nui_wc2` carries two local patches on top of upstream `main`:
@@ -159,11 +161,11 @@ Multiple `memory.store` calls are fine — one per topic. The dreaming system de
 ### Pitfalls to remember
 - The NUI router caches pages and initially appends them `display:none`. Any component that measures geometry must wait for visibility.
 - The render page now reloads the project from the server on every `show()` so editor voice changes are reflected.
-- **`.env.local` overrides `.env`.** A stale `NVOICE_URL` in `server/.env.local` (or in stored app settings via `/api/settings`) will override `.env`.
-- **Node v24 `fetch()` ignores `https.Agent({ rejectUnauthorized: false })`.** If nVoice returns to HTTPS, it must use a trusted cert or the server must use `https.request` / `--use-system-ca`.
-- nSpeech (Kokoro) can return **empty audio** under concurrent load; keep `RENDER_CONCURRENCY=1` until nSpeech is fixed.
-- If playback/alignment looks wrong, clear the project render cache directory and remove persisted `slide.tts` data through the project API; mixed cache is a common false lead.
-- Restart the slideshow server after changing `.env`, `ALIGNMENT_VERSION`, or imported server modules. Restart nVoice after changing Python files in `D:\Work\_GIT\nVoice`.
+- **`.env.local` overrides `.env`. Stored app settings (`PUT /api/settings`) override both.** When changing `NVOICE_URL` or `NSPEECH_URL`, update all three or check `GET /api/settings` to confirm the effective value.
+- **Node v24 `fetch()` ignores `https.Agent({ rejectUnauthorized: false })`.** nVoice must use plain HTTP or a proper CA-trusted cert.
+- nSpeech (Kokoro) empty-audio concurrency bug is **fixed upstream** (voice-state lock narrowed). `RENDER_CONCURRENCY=4` is safe.
+- The pipeline has retry logic for TTS and alignment as a safety net, but failures should be rare now.
+- If playback/alignment looks wrong, restart nVoice after changing its Python files. Restart the slideshow server after changing `.env`, `ALIGNMENT_VERSION`, or server modules.
 
 ## Current Slideshow System
 
