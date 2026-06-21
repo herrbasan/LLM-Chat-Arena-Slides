@@ -9,20 +9,32 @@
 - **Fail Fast, Always:** No defensive coding. No mock data. No fallback defaults. No silencing `try/catch`. No optional chaining (`?.`) for required values. Never write code paths for a scenario that you assume might happen but haven't verified — that's the definition of defensive coding. If `segments` data must be present, throw if it's absent; don't silently render unhighlighted text. If data should never be `null`, let the `TypeError` surface. Configuration must be explicit — missing required config must throw immediately at startup. When something breaks, let it crash and fix the root cause. The crash *is* the signal.
 - **Collaborative Development:** The human user is a partner, not just a reviewer. When facing architectural decisions, trade-offs, or uncertain paths, pause and ask for input. Explain the options clearly. The user's domain knowledge and preferences are valuable — include them in the loop. Avoid long silent stretches of trial-and-error; converse, don't just execute.
 - **Use Provided Tools:** Always use the built-in VS Code read/write tools to apply changes directly when asked. Do NOT use terminal commands, shell commands, or scripts to edit files, as these bypass VS Code's file tracking, history, and diff views, making it impossible for the human partner to follow along. Do not output giant code blocks in text for the user to copy-paste.
+- **Store Aggressively in Workshop Memory:** Use `mcp_workshop_tools` → `memory.store` for every observation, gotcha, preference, or lesson — during the session, not just at the end. The dreaming system deduplicates and organizes. More data makes the map better; it's impossible to clutter.
 
 ## Session Priming
 
 Every session starts blind. Before writing any code, run the priming sequence below. The goal is to load the cross-session context (memory topology, curated docs, library mental model) that the LLM does not have on its own.
 
-### Step 1 — `memory.overview` (workshop memory)
+### Step 0 — `mcp_workshop_tools` memory (persistent cross-session memory)
 
-Call the workshop memory tool's `memory.overview` to get the cluster map for this account. It returns clusters, cross-cluster bridges, wildcards, and the top nodes by cluster. Use it to identify which prior work is relevant to the current request before recalling specifics.
+This project uses the **workshop memory system** (`mcp_workshop_tools`) for durable cross-session knowledge. It is the primary memory store — the local `/memories/` tool is only for per-workspace scratch notes.
 
-- **Format:** start with `summary` (the default) — it lists clusters and top nodes without dumping all 182+ nodes. Switch to `full` only when the summary is missing the area you need.
-- **Recency gap:** the topology lags the most recent ~4 days. For anything from the last few days, use `memory.recall` with a focused query (e.g. `query: "Arena Slides import flow"`).
-- **What to look for:** the cluster whose hub matches the current task (e.g. Arena Slides Project = #434, nSpeech = #330, NUI = #295) and the cross-cluster bridges that connect it to dependencies (e.g. #434 ↔ #330 means Arena Slides TTS depends on nSpeech).
+**At session start:** always call `mcp_workshop_tools` → `memory.overview` to get the cluster map. Use `summary` format first (clusters + top nodes); use `full` only when the summary doesn't cover your area. Recency gap: the topology lags ~4 days; for recent work, use `memory.recall` with a focused query.
 
-### Step 2 — `documentation` tool (curated project docs)
+**During the session:** use `mcp_workshop_tools` → `memory.store` freely — even for minor observations, gotchas, preferences, or things you learned. The dreaming system deduplicates and organizes automatically. It's impossible to "clutter" — more data makes the map better.
+
+**End of session:** always persist what landed via `memory.store`. Multiple calls per topic are fine.
+
+**Common calls:**
+```
+mcp_workshop_tools.call(method="memory.overview")                          // session start
+mcp_workshop_tools.call(method="memory.recall", payload={query:"..."})     // search
+mcp_workshop_tools.call(method="memory.store", payload={description:"...", category:"Arena Slides", confidence:0.9, data:"..."})  // persist
+```
+
+**What to look for in overview:** the cluster whose hub matches the current task (e.g. Arena Slides Project, nSpeech, NUI) and the cross-cluster bridges that connect it to dependencies (e.g. Arena Slides ↔ nSpeech means TTS depends on nSpeech).
+
+### Step 1 — `documentation` tool (curated project docs)
 
 The workshop `documentation` tool exposes the project's curated documentation set across domains. The active domain for this project is **Web UI** (NUI library). Pull the relevant docs before writing UI code.
 
@@ -101,20 +113,11 @@ data-action="name:param@target"
 - `nui.debug.run()` returns `{ valid, count, issues: [{element, message, fix}] }`.
 - Dev-only — zero production cost if you don't import it.
 
-### Step 4 — End-of-session: persist via workshop memory
+### Step 4 — End-of-session: persist via `mcp_workshop_tools`
 
-When the user signals end-of-session ("we're done", "that's it for today", "let's wrap"), persist what landed through the **workshop memory system** (`mcp_workshop_tools`), not the local `memory` tool. The local memory tool is workspace-scoped and short-lived; workshop memory is the durable, dreaming-clustered cross-workspace store.
+When the user signals end-of-session ("we're done", "that's it for today", "let's wrap"), persist what landed through `mcp_workshop_tools.call(method="memory.store", ...)`. The dreaming system deduplicates and clusters across sessions.
 
-```
-mcp_workshop_tools.call(method="memory.store", payload={
-  description: "<one-line summary>",
-  category: "<Arena Slides | Preferences | nSpeech | ...>",
-  confidence: <0..1>,
-  data: "<what changed, why, what's deferred, operational reminders>"
-})
-```
-
-Multiple `memory.store` calls are fine — one per topic. The dreaming system deduplicates and clusters. Prefer workshop docs over the local `documentation` tool's domain files when both are available.
+Multiple `memory.store` calls per topic are expected — store aggressively. Prefer workshop memory over local `/memories/` files for anything that should survive across workspaces.
 
 ## Verified Project State — 2026-06-21
 
