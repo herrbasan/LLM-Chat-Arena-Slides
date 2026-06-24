@@ -298,7 +298,8 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
         text: spokenText,
         voice_name: voiceConfig.voice,
         speed: (voiceConfig.speed || 1.0).toString(),
-        output_format: 'mp3'
+        output_format: 'mp3',
+        offline: 'true'
     }).toString();
 
     let audioBuffer = null;
@@ -953,7 +954,8 @@ app.post('/api/render-deck/:id', async (req, res) => {
                 text: text,
                 voice_name: voiceConfig.voice,
                 speed: voiceConfig.speed.toString(),
-                output_format: 'mp3'
+                output_format: 'mp3',
+                offline: 'true'
             }).toString();
 
             const ttsRes = await fetch(ttsUrl);
@@ -1284,7 +1286,8 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
             text: spokenText,
             voice_name: voiceConfig.voice,
             speed: (voiceConfig.speed || 1.0).toString(),
-            output_format: 'mp3'
+            output_format: 'mp3',
+            offline: 'true'
         }).toString();
 
         const ttsRes = await fetch(ttsUrl);
@@ -1389,7 +1392,7 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
             // Generate TTS
             console.log(`[Render] Slide ${slideIdx}: generating TTS...`);
             const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
-                text, voice_name: voiceConfig.voice, speed: voiceConfig.speed.toString(), output_format: 'mp3'
+                text, voice_name: voiceConfig.voice, speed: voiceConfig.speed.toString(), output_format: 'mp3', offline: 'true'
             }).toString();
 
             const ttsRes = await fetch(ttsUrl);
