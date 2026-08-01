@@ -205,7 +205,13 @@ async function openAppSettingsDialog() {
         </div>
     `;
 
-    const { result } = nui.components.dialog.page(
+    // nui.components.dialog.page returns a PROMISE resolving to
+    // { dialog, main, result }. It must be awaited — destructuring the
+    // promise itself yields undefined for all three (the original code
+    // destructured { result } without await, so `await result` was
+    // `await undefined` → button === undefined → early return before the
+    // PUT, which is why settings never actually saved).
+    const { result, dialog } = await nui.components.dialog.page(
         'App settings',
         formHtml,
         {
@@ -216,22 +222,30 @@ async function openAppSettingsDialog() {
         }
     );
 
+    // Capture the form values when Save is clicked, BEFORE the dialog closes.
+    // The dialog's result promise resolves only after nui-dialog-close removes
+    // the dialog from the DOM, so reading the fields after `await result`
+    // finds nothing (querySelector returns null → empty strings saved).
+    // The Save button's click fires before close, so read synchronously here.
+    let captured = null;
+    dialog.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-value]');
+        if (!btn || btn.dataset.value !== 'save') return;
+        const q = (sel) => dialog.querySelector(sel);
+        const modelEl = q('#cfg-cleanup-model') || q('#cfg-cleanup-model select');
+        captured = {
+            llmGatewayUrl: (q('#cfg-llm-url')?.value || '').trim(),
+            llmGatewayApiKey: (q('#cfg-llm-key')?.value || '').trim(),
+            cleanupModel: modelEl ? (modelEl.value || '').trim() : '',
+            nspeechUrl: (q('#cfg-nspeech-url')?.value || '').trim(),
+            nvoiceUrl: (q('#cfg-nvoice-url')?.value || '').trim()
+        };
+    }, true);
+
     const button = await result;
-    if (button !== 'save') return;
+    if (button !== 'save' || !captured) return;
 
-    // Read the form values. For the model field, support both <select>
-    // and free-text input (depending on whether /api/models succeeded).
-    const modelEl = document.querySelector('#cfg-cleanup-model') ||
-        (document.querySelector('#cfg-cleanup-model select'));
-    const modelValue = modelEl ? (modelEl.value || '').trim() : '';
-
-    const patch = {
-        llmGatewayUrl: (document.querySelector('#cfg-llm-url')?.value || '').trim(),
-        llmGatewayApiKey: (document.querySelector('#cfg-llm-key')?.value || '').trim(),
-        cleanupModel: modelValue,
-        nspeechUrl: (document.querySelector('#cfg-nspeech-url')?.value || '').trim(),
-        nvoiceUrl: (document.querySelector('#cfg-nvoice-url')?.value || '').trim()
-    };
+    const patch = captured;
 
     try {
         const res = await fetch('/api/settings', {
