@@ -12,7 +12,9 @@ const path = require('path');
 
 // ─── Config ───────────────────────────────────────────────────
 
-const NSPEECH_URL = process.env.NSPEECH_URL || 'http://192.168.0.145:2233';
+// nSpeech V3 (see reference/nSpeech_API.md). TTS is POST /v1/audio/speech.
+// model: "nspeech" = whatever local engine the nSpeech dashboard selected.
+const NSPEECH_URL = process.env.NSPEECH_URL || 'http://192.168.0.100:2233';
 
 // ─── Helpers ──────────────────────────────────────────────────
 
@@ -32,18 +34,30 @@ function getVoiceConfig(role, voiceMapping) {
     return config;
 }
 
-function buildTtsUrl(text, voiceConfig) {
-    const params = new URLSearchParams({
-        text: text,
-        voice_name: voiceConfig.voice,
-        speed: (voiceConfig.speed || 1.0).toString(),
-        output_format: 'mp3'
+// nSpeech V3 TTS. Batch mode (render full audio before first byte) — the
+// CLI consumes the whole file anyway. Returns a Buffer of MP3 bytes.
+async function fetchTts(text, voiceConfig) {
+    const response = await fetch(`${NSPEECH_URL}/v1/audio/speech`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            model: voiceConfig.engine || 'nspeech',
+            input: text,
+            voice: voiceConfig.voice,
+            speed: voiceConfig.speed || 1.0,
+            response_format: 'mp3',
+            extra_body: { batch: true }
+        })
     });
-    return `${NSPEECH_URL}/tts?${params.toString()}`;
+    if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(`nSpeech TTS HTTP ${response.status}: ${body.slice(0, 200)}`);
+    }
+    return Buffer.from(await response.arrayBuffer());
 }
 
-function computeRenderHash(text, voice, speed) {
-    const state = `${text || ''}|${voice || ''}|${speed || 1.0}`;
+function computeRenderHash(text, voice, speed, engine) {
+    const state = `${text || ''}|${engine || ''}|${voice || ''}|${speed || 1.0}`;
     let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
     for (let i = 0; i < state.length; i++) {
         const ch = state.charCodeAt(i);
@@ -64,7 +78,7 @@ async function generateTtsForParagraph(text, voiceConfig, audioDir, msgIdx, para
         return null;
     }
 
-    const renderHash = computeRenderHash(spokenText, voiceConfig.voice, voiceConfig.speed);
+    const renderHash = computeRenderHash(spokenText, voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
     const filename = `msg_${String(msgIdx).padStart(3, '0')}_p${String(paraIdx).padStart(3, '0')}_${renderHash}.mp3`;
     const filePath = path.join(audioDir, filename);
     const audioUrl = `/cache/audio/{projectId}/${filename}`;
@@ -83,15 +97,9 @@ async function generateTtsForParagraph(text, voiceConfig, audioDir, msgIdx, para
         };
     }
 
-    const url = buildTtsUrl(spokenText, voiceConfig);
     console.log(`  [Msg ${msgIdx} Para ${paraIdx}] "${spokenText.substring(0, 60)}${spokenText.length > 60 ? '...' : ''}"`);
 
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`nSpeech TTS failed for msg ${msgIdx} para ${paraIdx}: HTTP ${response.status} ${response.statusText}`);
-    }
-
-    const audioBuffer = Buffer.from(await response.arrayBuffer());
+    const audioBuffer = await fetchTts(spokenText, voiceConfig);
     if (audioBuffer.length === 0) {
         throw new Error(`nSpeech TTS returned empty audio for msg ${msgIdx} para ${paraIdx}`);
     }
@@ -172,17 +180,11 @@ async function generateTtsForSlide(slide, voiceMapping, outputDir, slideIndex) {
     }
 
     const voiceConfig = getVoiceConfig(slide.speaker, voiceMapping);
-    const url = buildTtsUrl(text, voiceConfig);
 
     console.log(`  [Slide ${slideIndex}] "${text.substring(0, 60)}${text.length > 60 ? '...' : ''}"`);
     console.log(`    Voice: ${voiceConfig.voice}, Speed: ${voiceConfig.speed}`);
 
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`nSpeech TTS failed for slide ${slideIndex}: HTTP ${response.status} ${response.statusText}`);
-    }
-
-    const audioBuffer = Buffer.from(await response.arrayBuffer());
+    const audioBuffer = await fetchTts(text, voiceConfig);
     if (audioBuffer.length === 0) {
         throw new Error(`nSpeech TTS returned empty audio for slide ${slideIndex}`);
     }

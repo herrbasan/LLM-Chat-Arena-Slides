@@ -391,7 +391,7 @@ nui.registerPage('render', {
             const hasAudio = !!(para.audioRef || para.audioUrl);
             const hasHash = !!para.renderHash;
             if (!hasAudio && !hasHash) return 'unrendered';
-            const expectedHash = computeRenderHash(stripEmphasisForSpeech(para.text), voiceConfig.voice, voiceConfig.speed);
+            const expectedHash = computeRenderHash(stripEmphasisForSpeech(para.text), voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
             const isFresh = para.renderHash === expectedHash && hasAudio && (para.words?.length || 0) > 0;
             return isFresh ? 'fresh' : 'stale';
         }
@@ -439,7 +439,7 @@ nui.registerPage('render', {
             if (!slide.tts || slide.tts.error) return 'unrendered';
             const text = getSpokenText(slide);
             const roleCfg = deck.voiceMapping[slide.speaker] || deck.voiceMapping.narrator || {};
-            const expectedHash = computeRenderHash(text, roleCfg.voice, roleCfg.speed);
+            const expectedHash = computeRenderHash(text, roleCfg.voice, roleCfg.speed, roleCfg.engine);
             if (slide.tts.renderHash === expectedHash) return 'fresh';
             return 'stale';
         }
@@ -705,8 +705,8 @@ nui.registerPage('render', {
             return `<div class="slide-split-bubbles" aria-label="Chunk ${splitIdx + 1} of ${splitCount}">${bubbles.join('')}</div>`;
         }
 
-        function computeRenderHash(text, voice, speed) {
-            const state = `${text || ''}|${voice || ''}|${speed || 1.0}`;
+        function computeRenderHash(text, voice, speed, engine) {
+            const state = `${text || ''}|${engine || ''}|${voice || ''}|${speed || 1.0}`;
             let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
             for (let i = 0; i < state.length; i++) {
                 const ch = state.charCodeAt(i);
@@ -1697,6 +1697,16 @@ nui.registerPage('render', {
         });
         audio.addEventListener('ended', () => {
             const slide = deck?.slides?.[currentSlideIdx];
+
+            // Stop the highlight loop immediately. Between `ended` and the next
+            // paragraph's `play` event, audio.currentTime is STALE (it still
+            // holds the finished paragraph's end time until the new src loads
+            // and resets to 0). If the loop kept running during that fetch+decode
+            // window, updateWordHighlight would apply the stale (large) time to
+            // the NEXT paragraph's words and flash them active/past early — the
+            // "rushing highlight". Latency-dependent, hence intermittent. The
+            // loop is restarted by the `play` listener when the new audio starts.
+            stopLoop();
 
             // v3: chain to next paragraph
             if (slide?._paragraphs && currentParaIdx >= 0) {

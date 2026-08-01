@@ -299,6 +299,28 @@ window.SLIDESHOW_APP.voicesReady = (async () => {
     }
 })();
 
+// ─── Engines fetch (in-memory) ─────────────────────────────────
+//
+// nSpeech V3 exposes multiple engines (local + cloud) — see
+// /api/engines. The editor voice panel groups voices by engine and
+// stores the engine in deck.voiceMapping[role].engine. A voice value
+// without an engine prefix means the local dashboard-selected engine
+// (V3 model "nspeech") — this keeps pre-V3 projects valid.
+window.SLIDESHOW_APP.engines = [];
+window.SLIDESHOW_APP.enginesReady = (async () => {
+    try {
+        const res = await fetch('/api/engines');
+        const data = res.ok ? await res.json() : { engines: [] };
+        const engines = Array.isArray(data.engines) ? data.engines : [];
+        window.SLIDESHOW_APP.engines = engines;
+        return engines;
+    } catch (err) {
+        console.warn('[Engines] fetch failed:', err.message);
+        window.SLIDESHOW_APP.engines = [];
+        return [];
+    }
+})();
+
 // Initial stepper render once NUI is ready
 nui.ready().then(() => {
     updateStepper();

@@ -10,18 +10,38 @@
 
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
-
-// Allow self-signed certs for nVoice (internal service).
-const tlsAgent = new https.Agent({ rejectUnauthorized: false });
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 // ─── Config ───────────────────────────────────────────────────
 
-const NVOICE_URL = process.env.NVOICE_URL || 'https://192.168.0.100:2244';
-const ALIGNMENT_VERSION = 6;
+// nVoice V3 (see reference/nVoice_API.md). Alignment is
+// POST /v1/audio/align (multipart: file + text) → { text, duration, words[] }.
+// Both services live on BADKID over plain HTTP.
+const NVOICE_URL = process.env.NVOICE_URL || 'http://192.168.0.100:2244';
+const ALIGNMENT_VERSION = 7;
 
 // ─── Helpers ──────────────────────────────────────────────────
+
+// nVoice V3 align. Returns { text, duration, words: [{word, start, end, ...}] }.
+// Throws on HTTP error or empty word list — fail loud.
+async function fetchAlign(audioBuffer, text) {
+    const form = new FormData();
+    form.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), 'audio.mp3');
+    form.append('text', text);
+
+    const response = await fetch(`${NVOICE_URL}/v1/audio/align`, {
+        method: 'POST',
+        body: form
+    });
+    if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(`nVoice align HTTP ${response.status}: ${body.slice(0, 200)}`);
+    }
+    const data = await response.json();
+    if (!Array.isArray(data.words) || data.words.length === 0) {
+        throw new Error('nVoice align returned no words');
+    }
+    return data;
+}
 
 const { speakText } = require('./speak-text.js');
 
@@ -283,50 +303,19 @@ async function alignParagraph(paragraph, msgIdx, paraIdx) {
     }
 
     const audioBuffer = fs.readFileSync(paragraph.audioPath);
-    const url = `${NVOICE_URL}/transcribe?text=${encodeURIComponent(text)}`;
 
     console.log(`  [Msg ${msgIdx} Para ${paraIdx}] "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
     console.log(`    Audio: ${paragraph.audioFile} (${(audioBuffer.length / 1024).toFixed(1)} KB)`);
 
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: audioBuffer,
-        agent: tlsAgent
-    });
+    const data = await fetchAlign(audioBuffer, text);
+    const allWords = data.words.map(w => ({
+        word: w.word,
+        start: w.start,
+        end: w.end,
+        probability: w.probability
+    }));
 
-    if (!response.ok) {
-        throw new Error(`nVoice alignment failed: HTTP ${response.status} ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    if (!data.segments || data.segments.length === 0) {
-        console.log(`    Warning: No segments returned from nVoice`);
-        return null;
-    }
-
-    // Collect all words across segments
-    const allWords = [];
-    for (const seg of data.segments) {
-        if (seg.words) {
-            for (const w of seg.words) {
-                allWords.push({
-                    word: w.word,
-                    start: w.start,
-                    end: w.end,
-                    probability: w.probability
-                });
-            }
-        }
-    }
-
-    if (allWords.length === 0) {
-        console.log(`    Warning: No word timings in nVoice response`);
-        return null;
-    }
-
-    const lastSegEnd = data.segments[data.segments.length - 1].end || 0;
-    const audioDurationMs = Math.round(lastSegEnd * 1000);
+    const audioDurationMs = Math.round((data.duration || allWords[allWords.length - 1].end) * 1000);
 
     // For paragraphs, we use the STT words directly — they're short enough
     // that drift is minimal. The source text and STT output should be very
@@ -413,51 +402,19 @@ async function alignSlide(slide, slideIndex) {
     }
 
     const audioBuffer = fs.readFileSync(tts.audioPath);
-    const url = `${NVOICE_URL}/transcribe?text=${encodeURIComponent(text)}`;
 
     console.log(`  [Slide ${slideIndex}] "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
     console.log(`    Audio: ${tts.audioFile} (${(audioBuffer.length / 1024).toFixed(1)} KB)`);
 
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: audioBuffer,
-        agent: tlsAgent
-    });
+    const data = await fetchAlign(audioBuffer, text);
+    const allWords = data.words.map(w => ({
+        word: w.word,
+        start: w.start,
+        end: w.end,
+        probability: w.probability
+    }));
 
-    if (!response.ok) {
-        throw new Error(`nVoice alignment failed: HTTP ${response.status} ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    if (!data.segments || data.segments.length === 0) {
-        console.log(`    Warning: No segments returned from nVoice`);
-        return null;
-    }
-
-    // Collect all words across segments
-    const allWords = [];
-    for (const seg of data.segments) {
-        if (seg.words) {
-            for (const w of seg.words) {
-                allWords.push({
-                    word: w.word,
-                    start: w.start,
-                    end: w.end,
-                    probability: w.probability
-                });
-            }
-        }
-    }
-
-    if (allWords.length === 0) {
-        console.log(`    Warning: No word timings in nVoice response`);
-        return null;
-    }
-
-    // Get the actual audio duration from nVoice's last segment
-    const lastSegEnd = data.segments[data.segments.length - 1].end || 0;
-    const audioDurationMs = Math.round(lastSegEnd * 1000);
+    const audioDurationMs = Math.round((data.duration || allWords[allWords.length - 1].end) * 1000);
 
     // Align STT words to source text, using real audio duration for gaps
     const alignedWords = alignWordsToSource(text, allWords, audioDurationMs);

@@ -33,17 +33,22 @@ const { processInput: ttsProcess } = require('../pipeline/tts.js');
 const { processInput: alignProcess, processProject: alignProject, ALIGNMENT_VERSION } = require('../pipeline/align.js');
 const { speakText } = require('../pipeline/speak-text.js');
 
+// nSpeech/nVoice V3 clients — the only wire-format knowledge in the project.
+const nspeech = require('./nspeech.js');
+const nvoice = require('./nvoice.js');
+const { mp3DurationMs } = require('./mp3-duration.js');
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 // Global CSP header (replaces meta tag to avoid browser placement warnings).
-// media-src * allows the browser to play TTS preview audio directly
-// from nSpeech without a server proxy (same as LLM Gateway Chat).
+// media-src * allows rendered audio from the server; blob: is required for
+// the editor's TTS preview, which plays a Blob via URL.createObjectURL.
 app.use((req, res, next) => {
     res.setHeader(
         'Content-Security-Policy',
-        "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; media-src *; img-src 'self' data:;"
+        "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; media-src * blob:; img-src 'self' data:;"
     );
     next();
 });
@@ -208,26 +213,18 @@ function gcAudio() {
     }
 }
 
-// Check nVoice availability via the /health endpoint (added 2026-06-21).
-// Falls back to the root URL for older nVoice versions without /health.
+// Check nVoice availability via the V3 /health endpoint.
+// 503 means the worker model is still loading; connection failure means down.
 async function checkNVoiceAvailable() {
-    const base = getSettings().nvoiceUrl;
     try {
-        const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
+        const res = await nvoice.health(getSettings().nvoiceUrl);
         if (res.ok) return true;
-        // 503 = model still loading
         if (res.status === 503) {
             console.warn('[nVoice] Model still loading (503 from /health)');
         }
         return false;
     } catch {
-        // Fallback: try root URL for older nVoice versions without /health
-        try {
-            const res = await fetch(base, { signal: AbortSignal.timeout(3000), agent: tlsAgent });
-            return res.ok;
-        } catch {
-            return false;
-        }
+        return false;
     }
 }
 
@@ -260,9 +257,9 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
     // Using raw para.text would mismatch for any paragraph with
     // *emphasis* markers.
     const spokenText = speakText(para.text);
-    const renderHash = computeRenderHash(spokenText, voiceConfig.voice, voiceConfig.speed);
+    const renderHash = computeRenderHash(spokenText, voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
 
-    // Paragraph is fresh if its stored hash matches current text/voice/speed,
+    // Paragraph is fresh if its stored hash matches current text/voice/speed/engine,
     // the audio exists in the bucket (and is non-empty), and alignment is at
     // the current version. `force` bypasses the freshness check — the user
     // asked for it, do it.
@@ -294,14 +291,6 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
 
     // Generate TTS with retry. Empty audio and transient failures (5xx,
     // network errors) are retried; 4xx client errors are not.
-    const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
-        text: spokenText,
-        voice_name: voiceConfig.voice,
-        speed: (voiceConfig.speed || 1.0).toString(),
-        output_format: 'mp3',
-        offline: 'true'
-    }).toString();
-
     let audioBuffer = null;
     let ttsError = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -311,17 +300,13 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
         }
         try {
             console.log(`[v3 Render] msg${msgIdx}/p${paraIdx}: TTS attempt ${attempt}`);
-            const ttsRes = await fetch(ttsUrl, { signal });
-            if (!ttsRes.ok) {
-                const body = await ttsRes.text().catch(() => '');
-                console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} TTS HTTP ${ttsRes.status}: ${body.slice(0, 200)}`);
-                ttsError = `TTS HTTP ${ttsRes.status}`;
-                // Do not retry client errors (4xx).
-                if (ttsRes.status >= 400 && ttsRes.status < 500) break;
-                await sleep(500 * attempt);
-                continue;
-            }
-            const buf = Buffer.from(await ttsRes.arrayBuffer());
+            const buf = await nspeech.tts(getSettings().nspeechUrl, {
+                text: spokenText,
+                voice: voiceConfig.voice,
+                speed: voiceConfig.speed || 1.0,
+                engine: voiceConfig.engine || 'nspeech',
+                signal
+            });
             if (!buf || buf.length === 0) {
                 console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} TTS returned empty audio (attempt ${attempt})`);
                 ttsError = 'TTS returned empty audio';
@@ -335,8 +320,10 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
                 ttsError = 'Render aborted';
                 break;
             }
-            console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} TTS network error (attempt ${attempt}):`, err.message);
-            ttsError = `TTS network error: ${err.message}`;
+            console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} TTS error (attempt ${attempt}):`, err.message);
+            ttsError = err.status ? `TTS HTTP ${err.status}` : `TTS network error: ${err.message}`;
+            // Do not retry client errors (4xx).
+            if (err.status && err.status >= 400 && err.status < 500) break;
             await sleep(500 * attempt);
         }
     }
@@ -414,8 +401,12 @@ function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
 
-function computeRenderHash(text, voice, speed) {
-    const state = `${text || ''}|${voice || ''}|${speed || 1.0}`;
+function computeRenderHash(text, voice, speed, engine) {
+    // engine is part of the identity: the same voice id on a different
+    // engine (local vs minimax vs elevenlabs) produces different audio.
+    // Empty engine = "nspeech" (dashboard-selected local engine), which
+    // keeps pre-V3 hashes valid.
+    const state = `${text || ''}|${engine || ''}|${voice || ''}|${speed || 1.0}`;
     // Portable 64-bit hash (hex, safe for filenames, consistent with client)
     let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
     for (let i = 0; i < state.length; i++) {
@@ -546,12 +537,51 @@ app.get('/api/projects/:id', (req, res) => {
 
 app.get('/api/voices', async (req, res) => {
     try {
-        const response = await fetch(`${getSettings().nspeechUrl}/voices`);
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        const data = await response.json();
+        const data = await nspeech.listVoices(getSettings().nspeechUrl, req.query.engine);
         res.json(data);
     } catch (err) {
-        console.error('[Server] Failed to fetch voices from nSpeech:', err);
+        console.error('[Server] Failed to fetch voices from nSpeech:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/engines — nSpeech engines with their voices. The Node layer
+// merges voices into each engine entry so the browser needs exactly one
+// fetch to build the engine-grouped voice panel. Cloud engines get their
+// own voice list; local engines share the active engine's voices.
+app.get('/api/engines', async (req, res) => {
+    try {
+        const base = getSettings().nspeechUrl;
+        const data = await nspeech.listEngines(base);
+        const engines = Array.isArray(data.engines) ? data.engines : [];
+
+        // Active local engine voices (dashboard-selected).
+        let localVoices = [];
+        try {
+            const v = await nspeech.listVoices(base);
+            localVoices = v.voices || [];
+        } catch { /* voices unavailable — return engines without voices */ }
+
+        // Cloud engine voices, fetched in parallel. Engines that fail
+        // simply get an empty list — the UI hides empty groups.
+        const cloudNames = engines.filter(e => e.type === 'cloud').map(e => e.name);
+        const cloudVoices = await Promise.all(cloudNames.map(async name => {
+            try {
+                const v = await nspeech.listVoices(base, name);
+                return { name, voices: v.voices || [] };
+            } catch {
+                return { name, voices: [] };
+            }
+        }));
+        const voicesByEngine = new Map(cloudVoices.map(c => [c.name, c.voices]));
+
+        for (const eng of engines) {
+            eng.voices = eng.type === 'cloud' ? (voicesByEngine.get(eng.name) || []) : localVoices;
+        }
+
+        res.json({ current: data.current, engines });
+    } catch (err) {
+        console.error('[Server] Failed to fetch engines from nSpeech:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
@@ -938,7 +968,7 @@ app.post('/api/render-deck/:id', async (req, res) => {
             const text = getSpokenText(slide);
             const role = slide.speaker || 'narrator';
             const voiceConfig = deck.voiceMapping[role] || deck.voiceMapping.narrator || { voice: 'en-US-Male', speed: 1.0 };
-            const renderHash = computeRenderHash(text, voiceConfig.voice, voiceConfig.speed);
+            const renderHash = computeRenderHash(text, voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
 
             // Cache hit: audioRef exists and hash matches. Reuse audio,
             // preserve alignment data if the hash hasn't changed.
@@ -950,22 +980,19 @@ app.post('/api/render-deck/:id', async (req, res) => {
 
             // Cache miss — generate TTS
             console.log(`[Render] Slide ${i}: cache miss, generating TTS...`);
-            const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
-                text: text,
-                voice_name: voiceConfig.voice,
-                speed: voiceConfig.speed.toString(),
-                output_format: 'mp3',
-                offline: 'true'
-            }).toString();
-
-            const ttsRes = await fetch(ttsUrl);
-            if (!ttsRes.ok) {
-                console.error(`[Render] Slide ${i} TTS failed: HTTP ${ttsRes.status}`);
-                slide.tts = { error: `TTS HTTP ${ttsRes.status}`, renderHash };
+            let audioBuffer;
+            try {
+                audioBuffer = await nspeech.tts(getSettings().nspeechUrl, {
+                    text,
+                    voice: voiceConfig.voice,
+                    speed: voiceConfig.speed,
+                    engine: voiceConfig.engine || 'nspeech'
+                });
+            } catch (err) {
+                console.error(`[Render] Slide ${i} TTS failed: ${err.message}`);
+                slide.tts = { error: err.status ? `TTS HTTP ${err.status}` : err.message, renderHash };
                 continue;
             }
-
-            const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
             const { audioRef, audioUrl, byteLength } = storeAudio(
                 `slide_${String(i).padStart(3, '0')}_${renderHash}.mp3`, audioBuffer
             );
@@ -1279,23 +1306,20 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
         // Generate TTS. Hash must be computed from spoken text so it
         // matches what the browser expects for freshness checks.
         const spokenText = speakText(para.text);
-        const renderHash = computeRenderHash(spokenText, voiceConfig.voice, voiceConfig.speed);
+        const renderHash = computeRenderHash(spokenText, voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
 
         console.log(`[v3 Render] Re-rendering msg${mi}/p${pi}...`);
-        const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
-            text: spokenText,
-            voice_name: voiceConfig.voice,
-            speed: (voiceConfig.speed || 1.0).toString(),
-            output_format: 'mp3',
-            offline: 'true'
-        }).toString();
-
-        const ttsRes = await fetch(ttsUrl);
-        if (!ttsRes.ok) {
-            return res.status(502).json({ error: `TTS failed: HTTP ${ttsRes.status}` });
+        let audioBuffer;
+        try {
+            audioBuffer = await nspeech.tts(getSettings().nspeechUrl, {
+                text: spokenText,
+                voice: voiceConfig.voice,
+                speed: voiceConfig.speed || 1.0,
+                engine: voiceConfig.engine || 'nspeech'
+            });
+        } catch (err) {
+            return res.status(502).json({ error: err.status ? `TTS failed: HTTP ${err.status}` : `TTS failed: ${err.message}` });
         }
-
-        const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
         const { audioRef, audioUrl, byteLength } = storeAudio(
             `msg_${mi}_p_${pi}_${renderHash}.mp3`, audioBuffer
         );
@@ -1383,7 +1407,7 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
         const text = getSpokenText(slide);
         const role = slide.speaker || 'narrator';
         const voiceConfig = deck.voiceMapping[role] || deck.voiceMapping.narrator || { voice: 'en-US-Male', speed: 1.0 };
-        const renderHash = computeRenderHash(text, voiceConfig.voice, voiceConfig.speed);
+        const renderHash = computeRenderHash(text, voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
 
         // Cache hit: audioRef exists and hash matches.
         const audioCached = slide.tts?.audioRef && slide.tts.renderHash === renderHash && audioExists(slide.tts.audioRef);
@@ -1391,17 +1415,18 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
         if (!audioCached) {
             // Generate TTS
             console.log(`[Render] Slide ${slideIdx}: generating TTS...`);
-            const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
-                text, voice_name: voiceConfig.voice, speed: voiceConfig.speed.toString(), output_format: 'mp3', offline: 'true'
-            }).toString();
-
-            const ttsRes = await fetch(ttsUrl);
-            if (!ttsRes.ok) {
-                slide.tts = { error: `TTS HTTP ${ttsRes.status}`, renderHash };
+            let audioBuffer;
+            try {
+                audioBuffer = await nspeech.tts(getSettings().nspeechUrl, {
+                    text,
+                    voice: voiceConfig.voice,
+                    speed: voiceConfig.speed,
+                    engine: voiceConfig.engine || 'nspeech'
+                });
+            } catch (err) {
+                slide.tts = { error: err.status ? `TTS HTTP ${err.status}` : err.message, renderHash };
                 return res.json({ slideIdx, slide, error: slide.tts.error });
             }
-
-            const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
             const { audioRef, audioUrl, byteLength } = storeAudio(
                 `slide_${String(slideIdx).padStart(3, '0')}_${renderHash}.mp3`, audioBuffer
             );
@@ -1464,61 +1489,49 @@ async function alignSingleSlide(slide, slideIndex) {
     if (!slide.tts || !slide.tts.audioRef) return null;
 
     const audioBuffer = readAudio(slide.tts.audioRef);
-    const url = `${getSettings().nvoiceUrl}/align?text=${encodeURIComponent(text)}`;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60000);
 
     try {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/octet-stream' },
-            body: audioBuffer,
-            signal: controller.signal,
-            agent: tlsAgent
+        const data = await nvoice.align(getSettings().nvoiceUrl, {
+            audioBuffer,
+            text,
+            signal: controller.signal
         });
         clearTimeout(timeout);
-
-        if (!response.ok) {
-            throw new Error(`nVoice alignment failed: HTTP ${response.status}`);
-        }
-
-        const data = await response.json();
-
-        if (!Array.isArray(data.segments) || data.segments.length === 0) return null;
 
         const segments = [];
         const rawWords = [];
         let previousWord = null;
-        for (let segmentIndex = 0; segmentIndex < data.segments.length; segmentIndex++) {
-            const seg = data.segments[segmentIndex];
-            const segment = {
-                index: segmentIndex,
-                text: seg.text || '',
-                startMs: Math.round(seg.start * 1000),
-                endMs: Math.round(seg.end * 1000),
-                words: []
+        for (const w of data.words) {
+            const word = {
+                word: String(w.word).trim(),
+                startMs: Math.round(w.start * 1000),
+                endMs: Math.round(w.end * 1000),
+                probability: w.probability || 1.0,
+                segmentIndex: 0
             };
-            if (Array.isArray(seg.words)) {
-                for (const w of seg.words) {
-                    const word = {
-                        word: String(w.word).trim(),
-                        startMs: Math.round(w.start * 1000),
-                        endMs: Math.round(w.end * 1000),
-                        probability: w.probability || 1.0,
-                        segmentIndex
-                    };
-                    if (isImmediateDuplicateWord(previousWord, word)) continue;
-                    segment.words.push(word);
-                    rawWords.push(word);
-                    previousWord = word;
-                }
-            }
-            segments.push(segment);
+            if (isImmediateDuplicateWord(previousWord, word)) continue;
+            rawWords.push(word);
+            previousWord = word;
         }
         if (rawWords.length === 0) return null;
 
-        const durationMs = segments[segments.length - 1].endMs;
+        segments.push({
+            index: 0,
+            text: data.text || text,
+            startMs: rawWords[0].startMs,
+            endMs: rawWords[rawWords.length - 1].endMs,
+            words: rawWords
+        });
+
+        // durationMs must be the REAL audio length, not the last aligned
+        // word's end — nVoice under-reports trailing silence (up to 140% on
+        // short clips), and the player chains paragraphs + drives progress
+        // from durationMs. Using last-word-end made the display rush ahead
+        // and advanced to the next speaker's paragraph early.
+        const durationMs = mp3DurationMs(audioBuffer);
         const sourceWordCount = text.split(/\s+/).filter(w => w.length > 0).length;
         const alignedWordCount = rawWords.length;
         const alignComplete = alignedWordCount >= Math.floor(sourceWordCount * 0.85);
@@ -1551,7 +1564,6 @@ async function alignParagraph(paragraph, msgIdx, paraIdx, options = {}) {
     // speakText() in pipeline/speak-text.js.
     const spokenText = speakText(text);
     const audioBuffer = readAudio(paragraph.audioRef);
-    const url = `${getSettings().nvoiceUrl}/align?text=${encodeURIComponent(spokenText)}`;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60000);
@@ -1562,47 +1574,32 @@ async function alignParagraph(paragraph, msgIdx, paraIdx, options = {}) {
     }
 
     try {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/octet-stream' },
-            body: audioBuffer,
-            signal: controller.signal,
-            agent: tlsAgent
+        const data = await nvoice.align(getSettings().nvoiceUrl, {
+            audioBuffer,
+            text: spokenText,
+            signal: controller.signal
         });
         clearTimeout(timeout);
 
-        if (!response.ok) {
-            const body = await response.text().catch(() => '');
-            console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} nVoice align HTTP ${response.status}: ${body.slice(0, 200)}`);
-            throw new Error(`nVoice alignment failed: HTTP ${response.status}`);
-        }
-
-        const data = await response.json();
-        if (!Array.isArray(data.segments) || data.segments.length === 0) {
-            throw new Error('nVoice alignment returned no segments');
-        }
-
         const rawWords = [];
         let previousWord = null;
-        for (const seg of data.segments) {
-            if (!Array.isArray(seg.words)) continue;
-            for (const w of seg.words) {
-                const word = {
-                    word: String(w.word).trim(),
-                    startMs: Math.round(w.start * 1000),
-                    endMs: Math.round(w.end * 1000),
-                    probability: w.probability || 1.0
-                };
-                if (isImmediateDuplicateWord(previousWord, word)) continue;
-                rawWords.push(word);
-                previousWord = word;
-            }
+        for (const w of data.words) {
+            const word = {
+                word: String(w.word).trim(),
+                startMs: Math.round(w.start * 1000),
+                endMs: Math.round(w.end * 1000),
+                probability: w.probability || 1.0
+            };
+            if (isImmediateDuplicateWord(previousWord, word)) continue;
+            rawWords.push(word);
+            previousWord = word;
         }
         if (rawWords.length === 0) {
             throw new Error('nVoice alignment returned no words');
         }
 
-        const durationMs = rawWords[rawWords.length - 1].endMs;
+        // Real audio length, not last word end — see alignSingleSlide.
+        const durationMs = mp3DurationMs(audioBuffer);
         const sourceWordCount = spokenText.split(/\s+/).filter(w => w.length > 0).length;
         const alignedWordCount = rawWords.length;
         const alignComplete = alignedWordCount >= Math.floor(sourceWordCount * 0.85);
@@ -1621,44 +1618,24 @@ async function alignParagraph(paragraph, msgIdx, paraIdx, options = {}) {
 
 app.post('/api/tts-preview', async (req, res) => {
     try {
-        const { text, voice, speed } = req.body;
+        const { text, voice, speed, engine } = req.body;
         if (!text) return res.status(400).json({ error: 'Missing text' });
 
         // Strip *emphasis* markers via the shared speakText() helper so
         // the preview matches what the deck's rendered TTS will say.
         const spokenText = speakText(text);
-        const ttsUrl = `${getSettings().nspeechUrl}/tts?` + new URLSearchParams({
+        const audioBuffer = await nspeech.tts(getSettings().nspeechUrl, {
             text: spokenText,
-            voice_name: voice || 'en-US-Male',
-            speed: (speed || 1.0).toString(),
-            output_format: 'mp3'
-        }).toString();
+            voice: voice || 'en-US-Male',
+            speed: speed || 1.0,
+            engine: engine || 'nspeech'
+        });
 
-        const ttsRes = await fetch(ttsUrl);
-        if (!ttsRes.ok) {
-            return res.status(502).json({ error: `TTS failed: HTTP ${ttsRes.status}` });
-        }
-
-        // Stream the response body to the client so MediaSource can
-        // start playing immediately. fetch().body is a Web ReadableStream
-        // (since Node 18+); we have to read it as chunks and write to
-        // the Node response, since .pipe() doesn't exist on Web streams.
         res.setHeader('Content-Type', 'audio/mpeg');
-        const reader = ttsRes.body.getReader();
-        try {
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                if (!res.write(value)) {
-                    await new Promise(r => res.once('drain', r));
-                }
-            }
-        } finally {
-            res.end();
-        }
+        res.send(audioBuffer);
     } catch (err) {
         console.error('[Server] TTS preview failed:', err.message);
-        if (!res.headersSent) res.status(500).json({ error: err.message });
+        if (!res.headersSent) res.status(err.status === 400 ? 400 : 502).json({ error: err.message });
         else try { res.end(); } catch {}
     }
 });

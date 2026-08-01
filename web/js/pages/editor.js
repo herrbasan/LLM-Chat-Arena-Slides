@@ -61,21 +61,68 @@ nui.registerPage('editor', {
         if (!firstLoadOk) return; // load failed, bail
 
         // ─── Voice panel (always visible in the editor's right column) ─
-        // Renders the narrator / participantA / participantB rows with a
-        // voice select and speed slider. Changes are saved to the deck
-        // immediately. The "Conversation Source" tab from the old
-        // options dialog was retired — the moderator message is the seed
-        // prompt, not data the editor needs to see.
+        // Renders the narrator / participantA / participantB rows. Each row
+        // is a TWO-SELECT pattern: an engine select on top, and below it the
+        // voices for the selected engine (presets first). Speed slider last.
+        // Changes are saved to the deck immediately.
         const voicePanelBody = element.querySelector('#voice-panel-body');
         const voicePanel = element.querySelector('#voice-panel');
 
-        function buildVoicePanelHtml() {
-            // Read the latest voices list each time the panel is built.
-            // The fetch result is cached in localStorage (see app.js) so
-            // most page loads see a populated list synchronously.
-            const voiceOptions = (window.SLIDESHOW_APP.voices || [])
-                .map(v => ({ value: v.name || v, label: v.name || v }));
+        // Build the engine catalog once per panel render. Engine '' = the
+        // local nSpeech engine (dashboard-selected); its voices come from
+        // SLIDESHOW_APP.voices. Cloud engines come from SLIDESHOW_APP.engines
+        // (each already carries its .voices, merged server-side).
+        // Each engine's voices are sorted presets-first (curated base-voice +
+        // instructions combos — the entry point for engines without cloning),
+        // then alphabetically.
+        // Engine '' is NOT used as a select value. NUI's contract reserves
+        // value="" for the placeholder row (never rendered as a clickable
+        // option). A real option must have a non-empty value, so the local
+        // engine uses the sentinel LOCAL_ENGINE = 'nspeech' (which is also the
+        // V3 model name for the dashboard-selected engine). On save we map
+        // LOCAL_ENGINE back to "no engine field stored" so hashes stay
+        // compatible with pre-V3 projects.
+        const LOCAL_ENGINE = 'nspeech';
 
+        function buildEngineCatalog() {
+            // "Featured" voices float to the top with a ★: presets (curated
+            // base-voice + instructions combos) and cloned voices (the user's
+            // own cloned voices — minimax_cloned, elevenlabs_cloned, etc.).
+            // Both are user-curated, in contrast to the engine's stock system
+            // voices. Detect: preset via voice_type, cloned via category.
+            function isFeatured(v) {
+                return v.voice_type === 'preset' || v.category === 'cloned';
+            }
+            function sortVoices(voices) {
+                return voices.slice().sort((a, b) => {
+                    const ap = isFeatured(a) ? 0 : 1;
+                    const bp = isFeatured(b) ? 0 : 1;
+                    if (ap !== bp) return ap - bp;
+                    return String(a.name || a.voice_id).localeCompare(String(b.name || b.voice_id));
+                });
+            }
+            const catalog = [];
+            const localVoices = window.SLIDESHOW_APP.voices || [];
+            if (localVoices.length > 0) {
+                catalog.push({
+                    engine: LOCAL_ENGINE,
+                    label: 'Local (nSpeech)',
+                    voices: sortVoices(localVoices).map(v => ({ value: v.voice_id || v.name || v, label: v.name || v.voice_id || v, preset: isFeatured(v) }))
+                });
+            }
+            for (const eng of (window.SLIDESHOW_APP.engines || [])) {
+                if (eng.type !== 'cloud' || !Array.isArray(eng.voices) || eng.voices.length === 0) continue;
+                catalog.push({
+                    engine: eng.name,
+                    label: eng.name.charAt(0).toUpperCase() + eng.name.slice(1),
+                    voices: sortVoices(eng.voices).map(v => ({ value: v.voice_id || v.name, label: v.name || v.voice_id, preset: isFeatured(v) }))
+                });
+            }
+            return catalog;
+        }
+
+        function buildVoicePanelHtml() {
+            const catalog = buildEngineCatalog();
             const vm = deck.voiceMapping || {};
             const roles = [
                 { key: 'narrator', label: 'Narrator', defaultVoice: window.SLIDESHOW_CONFIG.DEFAULT_NARRATOR_VOICE, defaultSpeed: 0.95 },
@@ -85,13 +132,28 @@ nui.registerPage('editor', {
 
             return roles.map(r => {
                 const cfg = vm[r.key] || { voice: r.defaultVoice, speed: r.defaultSpeed };
+                // Stored engine → select value. Empty/missing engine = local,
+                // represented by the LOCAL_ENGINE sentinel (a real option).
+                const currentEngine = cfg.engine ? cfg.engine : LOCAL_ENGINE;
+                // Fall back to local if the stored engine is gone.
+                const engineEntry = catalog.find(e => e.engine === currentEngine) || catalog[0];
+                const engineOpts = catalog.map(e =>
+                    `<option value="${escapeHtml(e.engine)}" ${e.engine === (engineEntry?.engine || LOCAL_ENGINE) ? 'selected' : ''}>${escapeHtml(e.label)}</option>`
+                ).join('');
+                const voiceOpts = (engineEntry?.voices || []).map(o => {
+                    const label = o.preset ? `★ ${o.label}` : o.label;
+                    return `<option value="${escapeHtml(o.value)}" ${o.value === cfg.voice ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+                }).join('');
                 return `
-                    <div class="options-voice-row">
+                    <div class="options-voice-row" data-role="${r.key}">
                         <strong>${escapeHtml(r.label)}</strong>
+                        <nui-select id="engine-${r.key}" placeholder="Select engine...">
+                            <select>${engineOpts}</select>
+                        </nui-select>
                         <nui-select searchable id="voice-${r.key}">
                             <select>
                                 <option value="">Select voice...</option>
-                                ${voiceOptions.map(o => `<option value="${escapeHtml(o.value)}" ${o.value === cfg.voice ? 'selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
+                                ${voiceOpts}
                             </select>
                         </nui-select>
                         <div class="options-voice-speed">
@@ -109,17 +171,42 @@ nui.registerPage('editor', {
         function renderVoicePanel() {
             if (!voicePanelBody) return;
             voicePanelBody.innerHTML = buildVoicePanelHtml();
+            // innerHTML produces brand-new nui-select elements — upgrade them
+            // so NUI builds their option lists from the native selects.
+            customElements.upgrade(voicePanelBody);
         }
 
         function bindVoicePanelListeners() {
             if (!voicePanel) return;
             ['narrator', 'participantA', 'participantB'].forEach(key => {
-                const select = voicePanel.querySelector(`#voice-${key}`);
+                const engineSelect = voicePanel.querySelector(`#engine-${key}`);
+                const voiceSelect = voicePanel.querySelector(`#voice-${key}`);
                 const slider = voicePanel.querySelector(`#speed-${key}`);
                 const label = voicePanel.querySelector(`#speed-label-${key}`);
 
-                if (select) {
-                    select.addEventListener('nui-change', (e) => {
+                if (engineSelect) {
+                    engineSelect.addEventListener('nui-change', (e) => {
+                        if (!deck.voiceMapping[key]) deck.voiceMapping[key] = {};
+                        const values = e.detail?.values;
+                        const engine = (values && values[0]) || '';
+                        // LOCAL_ENGINE sentinel → no engine field stored, so
+                        // hashes stay compatible with pre-V3 projects. A cloud
+                        // engine name is stored as-is.
+                        if (engine && engine !== LOCAL_ENGINE) deck.voiceMapping[key].engine = engine;
+                        else delete deck.voiceMapping[key].engine;
+                        // Engine changed → the old voice id is almost certainly
+                        // invalid on the new engine. Clear it.
+                        deck.voiceMapping[key].voice = '';
+                        saveDeck();
+                        // Re-render the whole panel so the voice select rebuilds
+                        // its option list from the new engine's voices, then
+                        // rebind (the elements are new).
+                        renderVoicePanel();
+                        bindVoicePanelListeners();
+                    });
+                }
+                if (voiceSelect) {
+                    voiceSelect.addEventListener('nui-change', (e) => {
                         if (!deck.voiceMapping[key]) deck.voiceMapping[key] = {};
                         const values = e.detail?.values;
                         deck.voiceMapping[key].voice = (values && values[0]) || '';
@@ -146,10 +233,10 @@ nui.registerPage('editor', {
         // first paint (no flash of an empty dropdown). On fetch
         // failure, render with whatever's available.
         try {
-            await window.SLIDESHOW_APP.voicesReady;
+            await Promise.all([window.SLIDESHOW_APP.voicesReady, window.SLIDESHOW_APP.enginesReady]);
         } catch {
-            // voicesReady never rejects (it swallows errors), but be
-            // defensive in case that changes.
+            // voicesReady/enginesReady never reject (they swallow errors),
+            // but be defensive in case that changes.
         }
         renderVoicePanel();
         requestAnimationFrame(() => bindVoicePanelListeners());
@@ -303,12 +390,12 @@ nui.registerPage('editor', {
             if (!slide.tts || !slide.tts.renderHash) return false;
             const text = slide.text || slide.narration || '';
             const roleCfg = deck.voiceMapping[slide.speaker] || deck.voiceMapping.narrator || {};
-            const expectedHash = computeRenderHash(text, roleCfg.voice, roleCfg.speed);
+            const expectedHash = computeRenderHash(text, roleCfg.voice, roleCfg.speed, roleCfg.engine);
             return slide.tts.renderHash !== expectedHash && !slide.tts.cached;
         }
 
-        function computeRenderHash(text, voice, speed) {
-            const state = `${text || ''}|${voice || ''}|${speed || 1.0}`;
+        function computeRenderHash(text, voice, speed, engine) {
+            const state = `${text || ''}|${engine || ''}|${voice || ''}|${speed || 1.0}`;
             let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
             for (let i = 0; i < state.length; i++) {
                 const ch = state.charCodeAt(i);
@@ -894,7 +981,7 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                 if (!slide) return;
                 const text = slide.text || slide.narration || '';
                 const roleCfg = deck.voiceMapping[slide.speaker] || deck.voiceMapping.narrator || {};
-                previewTts(text, roleCfg.voice, roleCfg.speed, actionEl);
+                previewTts(text, roleCfg.voice, roleCfg.speed, actionEl, roleCfg.engine);
             }
 
             if (action === 'play-paragraph') {
@@ -904,7 +991,7 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                 if (!para) return;
                 const role = msg.speaker || 'narrator';
                 const roleCfg = deck.voiceMapping?.[role] || deck.voiceMapping?.narrator || {};
-                previewTts(para.text || '', roleCfg.voice, roleCfg.speed, actionEl);
+                previewTts(para.text || '', roleCfg.voice, roleCfg.speed, actionEl, roleCfg.engine);
             }
 
             if (action === 'delete-slide') {
@@ -929,25 +1016,12 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
         });
 
         // ─── TTS Preview ──────────────────────────────────────
-        // Talks directly to nSpeech from the browser — no server proxy.
-        // Same pattern as LLM Gateway Chat: new Audio(url) and play.
-        // Clicking the same button again stops playback and restores
-        // the volume icon.
+        // Goes through the server proxy (/api/tts-preview) — the browser
+        // never talks to nSpeech directly. One V3 client (server-side),
+        // no CORS/CSP surface. Clicking the same button again stops
+        // playback and restores the volume icon.
         let previewAudio = null;
         let previewButton = null;
-        let cachedNspeechUrl = null;
-
-        async function getNspeechUrl() {
-            if (cachedNspeechUrl) return cachedNspeechUrl;
-            try {
-                const res = await fetch('/api/settings');
-                const settings = res.ok ? await res.json() : {};
-                cachedNspeechUrl = settings.nspeechUrl || 'http://localhost:2233';
-            } catch {
-                cachedNspeechUrl = 'http://localhost:2233';
-            }
-            return cachedNspeechUrl;
-        }
 
         // Browser-side mirror of pipeline/speak-text.js speakText().
         function speakText(s) {
@@ -969,24 +1043,24 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
             resetPreviewButton();
         }
 
-        async function previewTts(text, voice, speed, btnEl) {
+        async function previewTts(text, voice, speed, btnEl, engine) {
             // If clicking the button that's already playing, stop.
             if (previewButton === btnEl) { stopTts(); return; }
             // Stop any previous playback + reset its button.
             stopTts();
 
             try {
-                const endpoint = await getNspeechUrl();
-                const spoken = speakText(text);
-                const url = `${endpoint}/tts?` + new URLSearchParams({
-                    text: spoken,
-                    voice_name: voice || '',
-                    speed: (speed || 1.0).toString(),
-                    output_format: 'mp3'
-                }).toString();
-
-                previewAudio = new Audio(url);
-                previewAudio.preload = 'auto';
+                const res = await fetch('/api/tts-preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: speakText(text), voice: voice || '', speed: speed || 1.0, engine: engine || undefined })
+                });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(data.error || `HTTP ${res.status}`);
+                }
+                const blob = await res.blob();
+                previewAudio = new Audio(URL.createObjectURL(blob));
                 previewAudio.onended = () => stopTts();
                 previewAudio.onerror = () => stopTts();
 
