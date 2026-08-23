@@ -142,8 +142,12 @@ function buildOpeningSlides(source) {
             type: 'topic',
             speaker: 'narrator',
             label: 'Narrator',
+            // Display keeps the seed verbatim — including the human's
+            // "Topic:" framing word, the one stable human-authored part
+            // of the deck. The narration frames the seed as a spoken
+            // sentence instead, absorbing the prefix into the colon.
             text: source.seedPromptRaw || source.seedPrompt || source.topic,
-            narration: source.seedPromptRaw || source.seedPrompt || source.topic,
+            narration: `The following was the only prompt given to the models: ${String(source.seedPromptRaw || source.seedPrompt || source.topic).replace(/^\s*Topic:\s*/i, '').trim()}`,
             tts: null
         }
     ];

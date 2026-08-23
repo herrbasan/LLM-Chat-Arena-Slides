@@ -715,6 +715,9 @@ app.delete('/api/projects/:id', (req, res) => {
     // are no longer referenced by any active document — gcBuckets()
     // moves them to the file trash.
     gcAudio();
+    // Drop the transient render-progress file too — it references the
+    // deleted project and serves no one after deletion.
+    fs.rmSync(getProjectRenderProgressPath(req.params.id), { force: true });
     res.json({ status: 'deleted' });
 });
 
