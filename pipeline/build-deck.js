@@ -79,6 +79,16 @@ function capitalize(s) {
     return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// Day-of-month as a spoken ordinal. Only the LAST word ordinalizes in
+// compounds (twenty-third, not twenty-threeth); round tens go y→ieth
+// (twentieth, thirtieth).
+function ordinalWord(n) {
+    if (n < 20 && NUMBER_WORDS_VOWEL_NEXT[n]) return NUMBER_WORDS_VOWEL_NEXT[n];
+    if (n % 10 === 0) return spell(n).replace(/y$/, 'ieth');
+    if (n > 20) return `${TENS[Math.floor(n / 10)]}-${ordinalWord(n % 10)}`;
+    return `${spell(n)}th`;
+}
+
 function formatHumanDate(iso) {
     if (!iso) return null;
     const d = new Date(iso);
@@ -86,10 +96,7 @@ function formatHumanDate(iso) {
     const day = d.getUTCDate();
     const month = MONTHS[d.getUTCMonth()];
     const year = d.getUTCFullYear();
-    const dayWord = day < 20 && NUMBER_WORDS_VOWEL_NEXT[day]
-        ? NUMBER_WORDS_VOWEL_NEXT[day]
-        : `${spell(day)}th`;
-    return `${month} ${dayWord}, ${spell(year)}`;
+    return `${month} ${ordinalWord(day)}, ${spell(year)}`;
 }
 
 // ─── Opening / closing slides (deterministic) ──────────────────
