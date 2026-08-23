@@ -1,8 +1,6 @@
 # Slideshow — Arena Conversation to Video Pipeline
 
-> **Status:** Planning  
-> **Incubated in:** LLM Gateway Chat repo — designed to be extracted into its own project  
-> **Dependencies:** nSpeech (TTS), nVoice (forced alignment for timing), LLM Gateway (narration generation), nui_wc2 (UI)
+> **Status:** Historical — this is the original plan. The current architecture is documented in [`Agents.md`](../Agents.md) (clean-before-split pipeline, no LLM in the import path, TTS + alignment via nSpeech V3).
 
 ---
 

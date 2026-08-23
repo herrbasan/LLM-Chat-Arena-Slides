@@ -157,20 +157,11 @@ async function openAppSettingsDialog() {
                 </nui-input-group>
             </div>
             <div class="settings-section">
-                <h3>nSpeech (TTS)</h3>
+                <h3>nSpeech (TTS + alignment)</h3>
                 <nui-input-group>
                     <label for="cfg-nspeech-url">URL</label>
                     <nui-input>
-                        <input type="text" id="cfg-nspeech-url" placeholder="http://192.168.0.100:3500" value="${escapeAttr(settings.nspeechUrl || '')}">
-                    </nui-input>
-                </nui-input-group>
-            </div>
-            <div class="settings-section">
-                <h3>nVoice (alignment)</h3>
-                <nui-input-group>
-                    <label for="cfg-nvoice-url">URL</label>
-                    <nui-input>
-                        <input type="text" id="cfg-nvoice-url" placeholder="https://127.0.0.1:2244" value="${escapeAttr(settings.nvoiceUrl || '')}">
+                        <input type="text" id="cfg-nspeech-url" placeholder="http://192.168.0.100:2233" value="${escapeAttr(settings.nspeechUrl || '')}">
                     </nui-input>
                 </nui-input-group>
             </div>
@@ -207,8 +198,7 @@ async function openAppSettingsDialog() {
         captured = {
             llmGatewayUrl: (q('#cfg-llm-url')?.value || '').trim(),
             llmGatewayApiKey: (q('#cfg-llm-key')?.value || '').trim(),
-            nspeechUrl: (q('#cfg-nspeech-url')?.value || '').trim(),
-            nvoiceUrl: (q('#cfg-nvoice-url')?.value || '').trim()
+            nspeechUrl: (q('#cfg-nspeech-url')?.value || '').trim()
         };
     }, true);
 

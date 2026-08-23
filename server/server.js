@@ -133,10 +133,8 @@ function getSettings() {
         // LLM gateway (editor chat)
         llmGatewayUrl: stored.llmGatewayUrl || process.env.LLM_GATEWAY_URL,
         llmGatewayApiKey: stored.llmGatewayApiKey || process.env.LLM_GATEWAY_API_KEY || '',
-        // nSpeech (TTS)
-        nspeechUrl: stored.nspeechUrl || process.env.NSPEECH_URL,
-        // nVoice (alignment)
-        nvoiceUrl: stored.nvoiceUrl || process.env.NVOICE_URL
+        // nSpeech (TTS + forced alignment)
+        nspeechUrl: stored.nspeechUrl || process.env.NSPEECH_URL
     };
 }
 
@@ -468,21 +466,14 @@ function isImmediateDuplicateWord(previousWord, word) {
 app.get('/js/config.js', (req, res) => {
     res.setHeader('Content-Type', 'application/javascript');
     res.setHeader('Cache-Control', 'no-store, must-revalidate');
-    const settings = getSettings();
+    // Client config: voice defaults for the editor's voice panel. All
+    // service calls go through same-origin API routes (CSP is
+    // default-src 'self'), so no service URLs are exposed here.
     const configScript = `
-// ============================================
-// Dynamically Generated Slideshow Configuration
-// ============================================
 window.SLIDESHOW_CONFIG = {
-    GATEWAY_URL: ${JSON.stringify(settings.llmGatewayUrl)},
-    NSPEECH_URL: ${JSON.stringify(settings.nspeechUrl)},
-    NVOICE_URL: ${JSON.stringify(settings.nvoiceUrl)},
-    DEFAULT_NARRATOR_VOICE: 'en-US-Male',
-    DEFAULT_NARRATOR_SPEED: 0.95
+    DEFAULT_NARRATOR_VOICE: ${JSON.stringify(process.env.VOICE_NARRATOR || 'en-US-Male')},
+    DEFAULT_NARRATOR_SPEED: ${parseFloat(process.env.VOICE_NARRATOR_SPEED) || 0.95}
 };
-if (!window.SLIDESHOW_CONFIG.GATEWAY_URL) {
-    throw new Error('FATAL: Slideshow client is missing required configuration properties.');
-}
     `;
     res.send(configScript);
 });
@@ -618,7 +609,7 @@ app.put('/api/settings', (req, res) => {
     if (!db) return res.status(500).json({ error: 'Database not initialized' });
     const body = req.body || {};
     // Only allow known keys; ignore anything else to avoid surprises.
-    const allowed = ['llmGatewayUrl', 'llmGatewayApiKey', 'nspeechUrl', 'nvoiceUrl'];
+    const allowed = ['llmGatewayUrl', 'llmGatewayApiKey', 'nspeechUrl'];
     const patch = {};
     for (const key of allowed) {
         if (key in body) {

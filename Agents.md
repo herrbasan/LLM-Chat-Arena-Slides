@@ -122,7 +122,7 @@ Multiple `memory.store` calls per topic are expected — store aggressively. Pre
 ## Verified Project State — 2026-06-21
 
 ### Clean-Before-Split Pipeline — 2026-08-23
-- **Import:** nSpeech `/v1/text/clean` runs per message BEFORE paragraph splitting (`pipeline/build-messages.js`); the stored paragraph text is the exact spoken text. Chat-client prefixes (`[name · HH:MM:SS]:`) are stripped by regex at import. Unspeakable paragraphs (`---` dividers, punctuation-only) are dropped at import.
+- **Import is fully deterministic — no LLM anywhere.** nSpeech `/v1/text/clean` runs per message BEFORE paragraph splitting (`pipeline/build-messages.js`); the stored paragraph text is the exact spoken text. Chat-client prefixes (`[name · HH:MM:SS]:`) are stripped by regex at import. Unspeakable paragraphs (`---` dividers, punctuation-only) are dropped at import. The LLM clean pass was removed (commit 2e1414a): it silently rewrote model output, violating the unedited-and-unsteered contract. Stage directions (`settles into the conversation.`) are spoken — the model wrote them, they belong in the transcript.
 - **Render:** never re-cleans. Server and browser both hash `paragraph.text` directly — there is no second cleaner in the freshness check.
 - **Editor:** edited paragraphs are re-cleaned via `POST /api/v3/clean-text` (nSpeech proxy) before save.
 - **Skip contract:** paragraphs failing `/[\p{L}\p{N}]/u` are skipped everywhere — status `skip`, render clears stale render fields and never calls TTS (nSpeech 400s on empty text). Single-paragraph endpoint fails loud (502) on empty TTS audio; alignment gaps always record `alignError` (no silent unaligned state).
@@ -171,20 +171,18 @@ Multiple `memory.store` calls per topic are expected — store aggressively. Pre
 ### Pitfalls to remember
 - The NUI router caches pages and initially appends them `display:none`. Any component that measures geometry must wait for visibility.
 - The render page now reloads the project from the server on every `show()` so editor voice changes are reflected.
-- **`.env.local` overrides `.env`. Stored app settings (`PUT /api/settings`) override both.** When changing `NVOICE_URL` or `NSPEECH_URL`, update all three or check `GET /api/settings` to confirm the effective value.
-- **Node v24 `fetch()` ignores `https.Agent({ rejectUnauthorized: false })`.** nVoice must use plain HTTP or a proper CA-trusted cert.
-- nSpeech (Kokoro) empty-audio concurrency bug is **fixed upstream** (voice-state lock narrowed). `RENDER_CONCURRENCY=4` is safe.
+- **`.env.local` overrides `.env`. Stored app settings (`PUT /api/settings`) override both.** When changing `NSPEECH_URL`, update all three or check `GET /api/settings` to confirm the effective value.
+- nSpeech can return HTTP 200 with empty audio for unknown voice ids (herrbasan/nSpeech#1) — both render paths guard against it, but if TTS "succeeds" with no audio, check the voice id first.
 - The pipeline has retry logic for TTS and alignment as a safety net, but failures should be rare now.
-- If playback/alignment looks wrong, restart nVoice after changing its Python files. Restart the slideshow server after changing `.env`, `ALIGNMENT_VERSION`, or server modules.
+- If playback/alignment looks wrong, restart the slideshow server after changing `.env`, `ALIGNMENT_VERSION`, or server modules.
 
 ## Current Slideshow System
 
 ### Runtime Services
 
 - **Slideshow server:** `server/server.js`, normally served at `http://localhost:3600`.
-- **nSpeech:** Generates MP3 audio from the exact spoken slide text via `NSPEECH_URL`.
-- **nVoice:** Produces speech-to-text segments and word timestamps via `NVOICE_URL`. Current local development uses **HTTP** `http://192.168.0.100:2244` (HTTPS with self-signed cert stopped working with Node v24's `fetch`; the HTTP endpoint was added to nVoice on 2026-06-20).
-- **nDB:** Project persistence is append-style JSONL through `modules/nDB`; do not hand-edit database records unless there is no API path.
+- **nSpeech:** One service for all audio work — `/v1/text/clean` (import), `/v1/audio/speech` (TTS), `/v1/audio/align` (forced alignment). Configured via `NSPEECH_URL`.
+- **nDB:** Project persistence (append-style JSONL) and audio storage (file bucket `rendered_slides`, SHA-256 dedup) through `modules/nDB`; do not hand-edit database records unless there is no API path.
 
 ### Spoken Text Contract (clean-before-split, 2026-08-23)
 
@@ -194,25 +192,19 @@ Multiple `memory.store` calls per topic are expected — store aggressively. Pre
 - Opening/end narrator messages are NOT nSpeech-cleaned — deterministic text, keeps the topic wording verbatim.
 - Render hash = text + engine + voice + speed. If the cleaning semantics change, every hash invalidates — re-render everything.
 
-### Render Cache
+### Audio Storage
 
-- Per-project render cache lives under `server/data/render_cache/{projectId}/`.
-- Audio file names are `slide_{000}_{renderHash}.mp3`.
-- `cache_meta.json` maps slide index to render hash.
-- `deck.json` stores the cached rendered deck, including `tts` data.
-- If playback/alignment looks impossible to reason about, clear the project render cache directory and remove persisted `slide.tts` data through the project API. Mixed old cache was the cause of several false leads.
+- Rendered audio lives in the nDB file bucket `rendered_slides`, deduplicated by SHA-256 content hash.
+- Each paragraph stores a compact `audioRef` (e.g. `rendered_slides:69538b86.mp3`) plus `audioUrl` for the browser (`/audio/:bucket/:id.:ext` route).
+- Deleting a project or editing paragraphs orphans the old refs; `gcBuckets()` moves unreferenced files to trash after every mutation.
 
 ### Alignment Contract
 
-- Do **not** remap nVoice words back onto source text with fuzzy matching, LCS, interpolation, or index matching. That caused drift and false synchronization.
-- `server/server.js` calls `POST {NVOICE_URL}/align?text=...` with the MP3 bytes and stores nVoice output directly.
-- The app stores:
-	- `tts.segments[]` with `startMs`, `endMs`, `text`, and `words[]`.
-	- `tts.words[]` as the flattened nVoice word list.
-	- `tts.durationMs`, `sourceWordCount`, `alignedWordCount`, `alignComplete`, and `alignVersion`.
-- The only post-processing allowed on nVoice words is immediate duplicate removal: adjacent words with the same normalized text and a tiny timing gap are dropped. This fixes artifacts like `string, string, one...` without changing real timing.
+- Alignment is nSpeech `POST /v1/audio/align` (multipart: MP3 + the paragraph's stored text). Text-constrained: the same string that TTS spoke.
+- Do **not** remap aligned words back onto source text with fuzzy matching, LCS, interpolation, or index matching. That caused drift and false synchronization.
+- Each paragraph stores `words[]` (flat: `word`, `startMs`, `endMs`, `probability`), `durationMs`, `alignComplete`, and `alignVersion`.
+- The only post-processing allowed on aligned words is immediate duplicate removal: adjacent words with the same normalized text and a tiny timing gap are dropped.
 - `ALIGNMENT_VERSION` in `pipeline/align.js` gates cached timing compatibility. Bump it whenever alignment storage or filtering semantics change.
-- nVoice `/align` is not true forced alignment. In `D:\Work\_GIT\nVoice`, do not feed the full script into faster-whisper `initial_prompt`; long prompts caused truncation and timestamp cliffs. Current working behavior uses normal transcription settings with word timestamps and the script only as endpoint context.
 
 ### Playback Contract
 
@@ -231,11 +223,10 @@ Multiple `memory.store` calls per topic are expected — store aggressively. Pre
 
 ### Known Alignment Diagnostics
 
-- If highlighting stops mid-slide, inspect consecutive word timestamps first. A large gap usually means nVoice skipped audio or cached stale alignment is being used.
-- Compare `/align` and `/transcribe` on the same MP3. If `/transcribe` is complete and `/align` is not, fix nVoice settings before changing the slideshow UI.
-- If the API shows `alignComplete: false`, check `sourceWordCount` vs. `alignedWordCount` and inspect segment tails before assuming the browser is wrong.
-- Always restart the slideshow server after changing `.env`, `ALIGNMENT_VERSION`, or imported server modules.
-- Always restart nVoice after changing `D:\Work\_GIT\nVoice` Python files.
+- If highlighting stops mid-slide, inspect consecutive word timestamps first. A large gap usually means the aligner skipped audio.
+- If a paragraph shows `alignComplete: false`, compare the word count against the source text before assuming the browser is wrong.
+- A paragraph with audio but no words and no `alignError` should be impossible — if you see one, it's a bug (alignment gaps always record `alignError`).
+- Always restart the slideshow server after changing `.env`, `ALIGNMENT_VERSION`, or server modules.
 
 ## Arena Conversation Semantics — The Topic Is the Seed
 
