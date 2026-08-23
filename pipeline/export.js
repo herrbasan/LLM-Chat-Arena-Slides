@@ -21,7 +21,7 @@ const path = require('path');
 require(path.join(__dirname, '../server/node_modules/dotenv')).config({ path: path.join(__dirname, '../server/.env') });
 
 const projectId = process.argv[2];
-const outputRoot = path.resolve(process.argv[3] || path.join(__dirname, '../server/data/exports'));
+const outputRoot = path.resolve(process.argv[3] || path.join(__dirname, '../web-export/convos'));
 
 if (!projectId) {
     console.error('Usage: node pipeline/export.js <projectId> [outputRoot]');
@@ -141,3 +141,66 @@ console.log(`[Export] ${slug}`);
 console.log(`  ${project.messages.length} messages, ${conversation.length} turns`);
 console.log(`  ${urlByRef.size} audio files`);
 console.log(`  → ${outDir}`);
+
+// ─── Root listing (index.html next to convos/) ─────────────
+// Regenerated on every export: one entry per baked conversation,
+// newest first. Static, deployable as-is.
+function esc(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function regenerateListing(convosDir) {
+    const rootDir = path.dirname(convosDir);
+    const entries = [];
+    for (const d of fs.readdirSync(convosDir, { withFileTypes: true })) {
+        if (!d.isDirectory()) continue;
+        try {
+            const p = JSON.parse(fs.readFileSync(path.join(convosDir, d.name, 'project.json'), 'utf-8'));
+            const durationMs = p.messages.reduce((sum, m) => sum + (m.paragraphs || []).reduce((s2, pa) => s2 + (pa.durationMs || 0), 0), 0);
+            entries.push({
+                slug: d.name,
+                topic: p.source?.topic || d.name,
+                date: p.source?.exportedAt || '',
+                participants: (p.source?.participants || []).filter(Boolean),
+                turns: p.messages.filter(m => m.type === 'conversation').length,
+                durationMs
+            });
+        } catch { /* folder without readable project.json — skip */ }
+    }
+    entries.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+
+    const items = entries.map(e => `        <a class="convo" href="player/?src=../convos/${e.slug}/">
+            <span class="convo__topic">${esc(e.topic)}</span>
+            <span class="convo__meta">${esc(humanDate(e.date))} · ${esc(e.participants.join(' vs '))} · ${e.turns} turns · ${Math.round(e.durationMs / 60000)} min</span>
+        </a>`).join('\n');
+
+    const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arena Conversations</title>
+<style>
+    :root { color-scheme: dark; }
+    body { margin: 0; background: rgb(20,20,20); color: rgb(230,230,230); font-family: system-ui, sans-serif; font-weight: 300; }
+    main { max-width: 48rem; margin: 0 auto; padding: 2rem 1rem; }
+    h1 { font-size: 1.25rem; font-weight: 400; color: rgb(180,180,180); margin-bottom: 2rem; }
+    .convo { display: block; padding: 1rem; margin-bottom: 0.5rem; background: rgb(30,30,30); border-radius: 0.25rem; text-decoration: none; color: inherit; border-left: 3px solid rgb(76,132,229); }
+    .convo:hover { background: rgb(40,40,40); }
+    .convo__topic { display: block; font-size: 1.1rem; margin-bottom: 0.25rem; }
+    .convo__meta { display: block; font-size: 0.85rem; color: rgb(180,180,180); }
+</style>
+</head>
+<body>
+<main>
+    <h1>Arena Conversations</h1>
+${items}
+</main>
+</body>
+</html>
+`;
+    fs.writeFileSync(path.join(rootDir, 'index.html'), html);
+    console.log(`  listing: ${entries.length} conversation(s) → ${path.join(rootDir, 'index.html')}`);
+}
+
+regenerateListing(outputRoot);

@@ -15,3 +15,7 @@ pipeline/output/
 # matches `_Archive/` at the repo root — `docs/_Archive/` is still
 # tracked and ships with the repo.
 /_Archive/
+
+# Baked web exports (artifacts) and the generated listing
+/web-export/convos/
+/web-export/index.html

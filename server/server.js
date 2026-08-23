@@ -1264,7 +1264,7 @@ app.post('/api/v3/clean-text', async (req, res) => {
 // The export player template, served at /player/. Baking export
 // folders (project.json + transcript.md + audio/) is a build step,
 // not an API feature: node pipeline/export.js <projectId> [outDir].
-const EXPORT_TEMPLATE_ROOT = path.join(__dirname, 'export-template');
+const EXPORT_TEMPLATE_ROOT = path.join(__dirname, '../web-export/player');
 
 // ─── v3 Render Progress (polling) ──────────────────────────
 
@@ -1569,7 +1569,7 @@ app.use('/nui', express.static(path.join(__dirname, '../modules/nui_wc2/NUI')));
 app.use('/player', express.static(EXPORT_TEMPLATE_ROOT));
 
 // Exported project data (project.json + audio) for the player
-app.use('/exports', express.static(path.join(dbPath, 'exports')));
+app.use('/exports', express.static(path.join(__dirname, '../web-export/convos')));
 
 // Serve modules (for nui addon imports from web/)
 app.use('/modules', express.static(path.join(__dirname, '../modules')));
