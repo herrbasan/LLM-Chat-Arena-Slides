@@ -175,11 +175,9 @@ nui.registerPage('projects', {
                     throw new Error('Invalid Arena Export format');
                 }
 
-                // Raw import: build a v3 project skeleton without running
-                // the LLM cleaning pass. The user goes to the editor and
-                // explicitly clicks "Clean text with AI" to run the cleaning
-                // pass (which calls /api/v3/generate-deck). This keeps the
-                // import flow fast and transparent: no surprise LLM calls.
+                // Import is fully deterministic: nSpeech regex clean +
+                // paragraph split, no LLM anywhere in the path. The
+                // models' words are the artifact — nothing is rewritten.
                 nui.components.banner.show({ content: 'Importing conversation…', priority: 'info' });
 
                 const res = await fetch('/api/v3/import-raw', {

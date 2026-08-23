@@ -1,21 +1,6 @@
 import { nui } from '/nui/nui.js';
 import { GatewayClient } from '../gateway-client.js';
 
-// Backward-compat helper: older v3 projects stored only paragraph-split
-// messages in deck.messages and did not keep the original message-level
-// source.messages. To regenerate, we need the message-level array the
-// importer expects, so join paragraphs back into a single content string.
-function reconstructSourceMessages(messages) {
-    if (!Array.isArray(messages)) return [];
-    return messages.map(m => ({
-        speaker: m.originalSpeaker || m.label || m.speaker || 'Unknown',
-        role: m.role || 'assistant',
-        content: (m.paragraphs || []).map(p => p.text || '').join('\n\n'),
-        createdAt: m.createdAt || null,
-        model: m.model || m.originalSpeaker || m.speaker || null
-    }));
-}
-
 nui.registerPage('editor', {
     html: 'editor.html',
     async init(element, params, nui) {
@@ -405,26 +390,6 @@ nui.registerPage('editor', {
             h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
             h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
             return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
-        }
-
-        // ─── Busy Overlay ────────────────────────────────────
-        // Blocks all interaction with the app while a long operation
-        // (generation) runs. No progress data — just a busy spinner.
-        // Uses <nui-loading mode="overlay">, toggled via `active`.
-        // Returns { el, updateText, remove }.
-        function showBusyOverlay(text) {
-            const el = document.createElement('nui-loading');
-            el.setAttribute('mode', 'overlay');
-            el.setAttribute('active', '');
-            document.body.appendChild(el);
-            return {
-                el,
-                updateText(t) {
-                    const label = el.querySelector('.loading-text');
-                    if (label) label.textContent = t || 'Loading...';
-                },
-                remove() { el.remove(); }
-            };
         }
 
         // ─── Save Deck ───────────────────────────────────────
@@ -817,156 +782,6 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
             const [actionPart] = actionSpec.split('@');
             const [action, ...paramParts] = actionPart.split(':');
             const param = paramParts.join(':');
-
-            if (action === 'generate-deck') {
-                if (isV3) {
-                    // v3: regenerate messages from source
-                    if ((deck.messages || []).length > 0) {
-                        const ok = await nui.components.dialog.confirm(
-                            'Regenerate messages?',
-                            `This will replace the current ${deck.messages.length} messages. Continue?`,
-                            { placement: 'top' }
-                        );
-                        if (!ok) return;
-                    }
-                    actionEl.setLoading?.(true);
-                    // Simple blocking overlay — no real progress data,
-                    // just keep the user from touching the app while
-                    // generation runs so results can't overwrite
-                    // in-flight edits.
-                    const overlay = showBusyOverlay('Generating messages…');
-                    try {
-                        // Re-import from source to regenerate. The source
-                        // payload must include the original message-level
-                        // messages array; older projects may not have
-                        // source.messages, so reconstruct it from the
-                        // paragraph-split deck.messages.
-                        const sourcePayload = {
-                            ...deck.source,
-                            messages: deck.source?.messages?.length
-                                ? deck.source.messages
-                                : reconstructSourceMessages(deck.messages)
-                        };
-                        const res = await fetch('/api/v3/generate-deck', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(sourcePayload)
-                        });
-                        if (!res.ok) {
-                            const errText = await res.text().catch(() => '');
-                            throw new Error('Server returned ' + res.status + ': ' + errText.substring(0, 200));
-                        }
-                        const generated = await res.json();
-                        deck.messages = generated.messages || [];
-                        deck.voiceMapping = { ...deck.voiceMapping, ...generated.voiceMapping };
-                        await saveDeck();
-                        renderSlides();
-                        nui.components.banner.show({ content: `Generated ${deck.messages.length} messages`, priority: 'success', autoClose: 3000 });
-                    } catch (err) {
-                        nui.components.banner.show({ content: 'Generation failed: ' + err.message, priority: 'alert', autoClose: 5000 });
-                    } finally {
-                        overlay.remove();
-                        actionEl.setLoading?.(false);
-                    }
-                } else {
-                // v2: original generate-deck
-                // If the deck already has slides, ask first — this
-                // action silently overwrites them. Voice mapping
-                // and source are preserved; only the generated
-                // slide list is replaced.
-                if ((deck.slides || []).length > 0) {
-                    const ok = await nui.components.dialog.confirm(
-                        'Regenerate slides?',
-                        `This will replace the current ${deck.slides.length} slide${deck.slides.length === 1 ? '' : 's'} with a freshly generated deck. Your source, voice mapping, and manual edits to slide text will be lost. Continue?`,
-                        { placement: 'top' }
-                    );
-                    if (!ok) return;
-                }
-                actionEl.setLoading?.(true);
-
-                // Simple blocking overlay — prevents editing during
-                // generation so results can't overwrite in-flight edits.
-                const overlay = showBusyOverlay('Generating slides…');
-
-                try {
-                    const res = await fetch('/api/generate-deck', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Accept': 'text/event-stream'
-                        },
-                        body: JSON.stringify(deck.source)
-                    });
-
-                    if (!res.ok) {
-                        const errText = await res.text();
-                        throw new Error('Server returned ' + res.status + ': ' + errText.substring(0, 200));
-                    }
-                    if (!res.body) throw new Error('No response body (no streaming support)');
-
-                    // Parse SSE stream.
-                    const reader = res.body.getReader();
-                    const decoder = new TextDecoder();
-                    let buf = '';
-                    let generated = null;
-                    let lastErr = null;
-
-                    while (true) {
-                        const { value, done } = await reader.read();
-                        if (done) break;
-                        buf += decoder.decode(value, { stream: true });
-
-                        // SSE events are separated by blank lines; process complete
-                        // events as they appear.
-                        let idx;
-                        while ((idx = buf.indexOf('\n\n')) !== -1) {
-                            const raw = buf.slice(0, idx);
-                            buf = buf.slice(idx + 2);
-                            const lines = raw.split('\n');
-                            let eventName = 'message';
-                            let dataLines = [];
-                            for (const line of lines) {
-                                if (line.startsWith('event:')) eventName = line.slice(6).trim();
-                                else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
-                                // lines starting with ':' are SSE comments (heartbeat) — ignore
-                            }
-                            if (dataLines.length === 0) continue;
-                            const dataStr = dataLines.join('\n');
-                            let data;
-                            try { data = JSON.parse(dataStr); } catch { data = dataStr; }
-
-                            if (eventName === 'progress') {
-                                const pct = Math.round(data.pct || 0);
-                                overlay.updateText(`${data.message || data.stage} (${pct}%)`);
-                                // Yield to the browser so the overlay repaints.
-                                await new Promise(r => setTimeout(r, 0));
-                            } else if (eventName === 'done') {
-                                // Server has finished; the 'result' event will follow
-                                // (or it already did in the same packet). No action.
-                            } else if (eventName === 'result') {
-                                generated = data;
-                            } else if (eventName === 'error') {
-                                lastErr = new Error(data.message || 'Server reported error');
-                            }
-                        }
-                    }
-
-                    if (lastErr) throw lastErr;
-                    if (!generated) throw new Error('Generation finished without a result');
-
-                    deck.slides = generated.slides || [];
-                    deck.voiceMapping = { ...deck.voiceMapping, ...generated.voiceMapping };
-                    await saveDeck();
-                    renderSlides();
-                    nui.components.banner.show({ content: `Generated ${deck.slides.length} slides`, priority: 'success', autoClose: 3000 });
-                } catch (err) {
-                    nui.components.banner.show({ content: 'Generation failed: ' + err.message, priority: 'alert', autoClose: 5000 });
-                } finally {
-                    overlay.remove();
-                    actionEl.setLoading?.(false);
-                }
-                } // end v2 generate-deck else block
-            }
 
             if (action === 'chat-send') sendChat();
             if (action === 'goto-render') {

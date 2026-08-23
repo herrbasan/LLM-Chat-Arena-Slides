@@ -1,13 +1,11 @@
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
-const https = require('https');
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const crypto = require('crypto');
 
 // Allow self-signed certs for internal services.
-const tlsAgent = new https.Agent({ rejectUnauthorized: false });
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 // Render concurrency: how many paragraphs to process in parallel.
@@ -27,9 +25,7 @@ try {
 }
 
 // Pipeline modules
-const { cleanWithLLM } = require('../pipeline/build-deck.js');
 const { buildProject } = require('../pipeline/build-messages.js');
-const { parseArenaExport } = require('../pipeline/importer.js');
 const { processInput: ttsProcess } = require('../pipeline/tts.js');
 const { processInput: alignProcess, processProject: alignProject, ALIGNMENT_VERSION } = require('../pipeline/align.js');
 
@@ -134,10 +130,9 @@ function saveStoredSettings(partial) {
 function getSettings() {
     const stored = loadStoredSettings();
     return {
-        // LLM gateway (cleanup + chat)
+        // LLM gateway (editor chat)
         llmGatewayUrl: stored.llmGatewayUrl || process.env.LLM_GATEWAY_URL,
         llmGatewayApiKey: stored.llmGatewayApiKey || process.env.LLM_GATEWAY_API_KEY || '',
-        cleanupModel: stored.cleanupModel || process.env.CLEANUP_MODEL || 'badkid-llama-chat',
         // nSpeech (TTS)
         nspeechUrl: stored.nspeechUrl || process.env.NSPEECH_URL,
         // nVoice (alignment)
@@ -623,7 +618,7 @@ app.put('/api/settings', (req, res) => {
     if (!db) return res.status(500).json({ error: 'Database not initialized' });
     const body = req.body || {};
     // Only allow known keys; ignore anything else to avoid surprises.
-    const allowed = ['llmGatewayUrl', 'llmGatewayApiKey', 'cleanupModel', 'nspeechUrl', 'nvoiceUrl'];
+    const allowed = ['llmGatewayUrl', 'llmGatewayApiKey', 'nspeechUrl', 'nvoiceUrl'];
     const patch = {};
     for (const key of allowed) {
         if (key in body) {
@@ -640,46 +635,6 @@ app.put('/api/settings', (req, res) => {
     // Return the public view (API key redacted unless explicitly asked).
     const isApiKeyPatch = 'llmGatewayApiKey' in patch;
     res.json(getPublicSettings(isApiKeyPatch));
-});
-
-// GET /api/models — proxy to the LLM gateway's /v1/models.
-// Used by the config dialog to populate the cleanup model <select>.
-// Returns { models: [{ id, ... }, ...] } or { models: [], error } on
-// gateway failure (so the dialog can fall back to a free-text input).
-app.get('/api/models', async (req, res) => {
-    const settings = getSettings();
-    if (!settings.llmGatewayUrl) {
-        return res.json({ models: [], error: 'LLM gateway URL not configured' });
-    }
-    try {
-        const response = await fetch(`${settings.llmGatewayUrl.replace(/\/+$/, '')}/v1/models`, {
-            signal: AbortSignal.timeout(5000),
-            agent: tlsAgent,
-            headers: settings.llmGatewayApiKey
-                ? { 'Authorization': `Bearer ${settings.llmGatewayApiKey}` }
-                : {}
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        // Normalize to a flat list of model ids; different gateways
-        // return different shapes (some nest under .data, some return
-        // an array, some return an object with a .models field).
-        let models = [];
-        if (Array.isArray(data)) {
-            models = data.map(m => (typeof m === 'string' ? m : m.id)).filter(Boolean);
-        } else if (Array.isArray(data.data)) {
-            models = data.data.map(m => m.id).filter(Boolean);
-        } else if (Array.isArray(data.models)) {
-            models = data.models.map(m => (typeof m === 'string' ? m : m.id)).filter(Boolean);
-        } else if (typeof data === 'object' && data !== null) {
-            // Some gateways return a top-level object of { id: meta }.
-            models = Object.keys(data);
-        }
-        res.json({ models });
-    } catch (err) {
-        console.warn('[Server] /api/models fetch failed:', err.message);
-        res.json({ models: [], error: err.message });
-    }
 });
 
 app.put('/api/projects/:id', (req, res) => {
@@ -721,152 +676,12 @@ app.delete('/api/projects/:id', (req, res) => {
     res.json({ status: 'deleted' });
 });
 
-// ─── LLM Slide Generation (with progress streaming) ──────────
-
-app.post('/api/generate-deck', async (req, res) => {
-    const arenaData = req.body;
-    // Accept both the canonical Arena export (messages at top level)
-    // and the chat-app export (messages under session.messages).
-    const hasMessages = arenaData && (Array.isArray(arenaData.messages) || Array.isArray(arenaData.session?.messages));
-    if (!hasMessages) {
-        return res.status(400).json({ error: 'Invalid Arena export: missing messages array' });
-    }
-
-    // Honor the Accept header. If client wants SSE, stream progress events.
-    // Otherwise fall back to a single JSON response (legacy behavior).
-    const accept = (req.headers['accept'] || '').toLowerCase();
-    const useSSE = accept.includes('text/event-stream');
-
-    if (!useSSE) {
-        // Legacy JSON mode.
-        try {
-            console.log(`[Server] Generate deck: "${arenaData.topic}", ${arenaData.messages.length} messages`);
-            const source = parseArenaExport(arenaData);
-            const deck = await cleanWithLLM(source, null);
-            res.json(deck);
-        } catch (err) {
-            console.error('[Server] Generate deck failed:', err.message);
-            res.status(500).json({ error: err.message });
-        }
-        return;
-    }
-
-    // SSE progress mode.
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no' // Disable proxy buffering (nginx etc.)
-    });
-    // Flush headers immediately so the client sees a connection.
-    if (res.flushHeaders) res.flushHeaders();
-    // Disable Nagle's algorithm so each write is sent as a separate
-    // TCP packet — otherwise progress events batch up and the client
-    // sees them all at once.
-    if (res.socket) res.socket.setNoDelay(true);
-
-    const send = (event, data) => {
-        res.write(`event: ${event}\n`);
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
-        // Compression middleware adds a .flush() method; if present,
-        // force the write to the wire immediately.
-        if (res.flush) res.flush();
-    };
-
-    // Periodic keep-alive so proxies don't drop the connection.
-    const heartbeat = setInterval(() => {
-        try { res.write(': heartbeat\n\n'); } catch {}
-    }, 15000);
-
-    try {
-        console.log(`[Server] Generate deck (SSE): "${arenaData.topic}", ${arenaData.messages.length} messages`);
-        const source = parseArenaExport(arenaData);
-        const deck = await cleanWithLLM(source, null, (stage, message, pct) => {
-            send('progress', { stage, message, pct });
-        });
-        send('done', { slideCount: deck.slides.length });
-        send('result', deck);
-        res.end();
-    } catch (err) {
-        console.error('[Server] Generate deck failed:', err.message);
-        send('error', { message: err.message });
-        res.end();
-    } finally {
-        clearInterval(heartbeat);
-    }
-});
-
-// ─── v3 Generate Deck (Paragraph Architecture) ─────────────
-app.post('/api/v3/generate-deck', async (req, res) => {
-    const arenaData = req.body;
-    // Accept both the canonical Arena export (messages at top level)
-    // and the chat-app export (messages under session.messages).
-    const hasMessages = arenaData && (Array.isArray(arenaData.messages) || Array.isArray(arenaData.session?.messages));
-    if (!hasMessages) {
-        return res.status(400).json({ error: 'Invalid Arena export: missing messages array' });
-    }
-
-    const accept = (req.headers['accept'] || '').toLowerCase();
-    const useSSE = accept.includes('text/event-stream');
-
-    if (!useSSE) {
-        try {
-            console.log(`[Server] v3 Generate: ${arenaData.messages.length} messages`);
-            const project = await buildProject(arenaData, null, null, { skipClean: false, settings: getSettings() });
-            res.json(project);
-        } catch (err) {
-            console.error('[Server] v3 Generate failed:', err.message);
-            res.status(500).json({ error: err.message });
-        }
-        return;
-    }
-
-    // SSE progress mode
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no'
-    });
-    if (res.flushHeaders) res.flushHeaders();
-    if (res.socket) res.socket.setNoDelay(true);
-
-    const send = (event, data) => {
-        res.write(`event: ${event}\n`);
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
-        if (res.flush) res.flush();
-    };
-
-    const heartbeat = setInterval(() => {
-        try { res.write(': heartbeat\n\n'); } catch {}
-    }, 15000);
-
-    try {
-        console.log(`[Server] v3 Generate (SSE): ${arenaData.messages.length} messages`);
-        const project = await buildProject(arenaData, null, (stage, message, pct) => {
-            send('progress', { stage, message, pct });
-        }, { skipClean: false, settings: getSettings() });
-        const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
-        send('done', { messageCount: project.messages.length, paragraphCount: totalParagraphs });
-        send('result', project);
-        res.end();
-    } catch (err) {
-        console.error('[Server] v3 Generate failed:', err.message);
-        send('error', { message: err.message });
-        res.end();
-    } finally {
-        clearInterval(heartbeat);
-    }
-});
-
-// Raw import: builds a v3 project skeleton from the Arena export
-// WITHOUT running the LLM cleaning pass. Used by the import flow so
-// the user is never surprised by a silent LLM call. The editor's
-// "Generate with AI" button is the explicit trigger for the clean
-// pass (which calls /api/v3/generate-deck above). The resulting
-// project still has the deterministic opening slides (setup +
-// details + topic, using source.seedPrompt) and paragraph-split
-// conversation messages, but no LLM-derived text cleaning.
+// Import: builds a v3 project from the Arena export. Fully
+// deterministic — nSpeech regex clean + paragraph split, no LLM
+// anywhere in the path (the models' words are the artifact — stage
+// directions and all stay in the transcript). The project gets the
+// deterministic opening slides (setup + details + topic, using
+// source.seedPrompt) and paragraph-split conversation messages.
 app.post('/api/v3/import-raw', async (req, res) => {
     const arenaData = req.body;
     // Accept both the canonical Arena export (messages at top level)
@@ -878,7 +693,7 @@ app.post('/api/v3/import-raw', async (req, res) => {
     try {
         const msgCount = (arenaData.messages || arenaData.session.messages).length;
         console.log(`[Server] v3 Import (raw): ${msgCount} messages`);
-        const project = await buildProject(arenaData, null, null, { skipClean: true, settings: getSettings() });
+        const project = await buildProject(arenaData, null, null, { settings: getSettings() });
         res.json(project);
     } catch (err) {
         console.error('[Server] v3 Import (raw) failed:', err.message);

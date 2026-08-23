@@ -39,7 +39,7 @@ async function runPipelineV3(inputPath, outputDir, options = {}) {
         console.log('  Using cached project (delete project_v3.json to re-run)');
         project = JSON.parse(fs.readFileSync(projectPath, 'utf-8'));
     } else {
-        project = await buildProject(arenaData, outputDir, undefined, { skipClean: options.skipClean });
+        project = await buildProject(arenaData, outputDir, undefined, {});
     }
 
     const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);

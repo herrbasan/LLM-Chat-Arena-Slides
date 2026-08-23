@@ -129,32 +129,20 @@ document.addEventListener('click', (e) => {
 // ─── App Settings Dialog ───────────────────────────────────────
 //
 // The gear button in the header opens a modal where the user can set
-// the LLM gateway URL/model, the nSpeech URL, and the nVoice URL. All
-// settings are stored server-side in nDB under '__app_settings__'.
-// Changes apply live on the next server call — no restart needed.
-//
-// The model <select> is populated from GET /api/models (a proxy to
-// the gateway's /v1/models). On gateway failure the <select> falls
-// back to a free-text input so the user can still type a name.
+// the LLM gateway URL/key (editor chat), the nSpeech URL, and the
+// nVoice URL. All settings are stored server-side in nDB under
+// '__app_settings__'. Changes apply live — no restart needed.
 async function openAppSettingsDialog() {
     await nui.ready();
 
-    // Fetch current settings (with API key, for editing) and model list
-    // in parallel.
-    const [settingsRes, modelsRes] = await Promise.all([
-        fetch('/api/settings?includeSecrets=1'),
-        fetch('/api/models').catch(() => ({ ok: false, json: async () => ({ models: [] }) }))
-    ]);
+    const settingsRes = await fetch('/api/settings?includeSecrets=1');
     const settings = settingsRes.ok ? await settingsRes.json() : {};
-    const modelsData = modelsRes.ok ? await modelsRes.json() : { models: [] };
-    const models = Array.isArray(modelsData.models) ? modelsData.models : [];
-    const modelListFailed = models.length === 0;
 
     const formHtml = `
         <div class="settings-dialog">
             <div class="settings-section">
                 <h3>LLM Gateway</h3>
-                <p class="settings-hint">Used for the "Clean text with AI" step and the editor chat.</p>
+                <p class="settings-hint">Used by the editor chat.</p>
                 <nui-input-group>
                     <label for="cfg-llm-url">Gateway URL</label>
                     <nui-input>
@@ -166,22 +154,6 @@ async function openAppSettingsDialog() {
                     <nui-input>
                         <input type="password" id="cfg-llm-key" placeholder="Leave empty if gateway is open" value="${escapeAttr(settings.llmGatewayApiKey || '')}" autocomplete="off">
                     </nui-input>
-                </nui-input-group>
-                <nui-input-group>
-                    <label for="cfg-cleanup-model">Cleanup model</label>
-                    ${modelListFailed ? `
-                        <nui-input>
-                            <input type="text" id="cfg-cleanup-model" placeholder="badkid-llama-chat" value="${escapeAttr(settings.cleanupModel || '')}">
-                        </nui-input>
-                        <p class="settings-hint">Couldn't reach the gateway's /v1/models — type the model name.</p>
-                    ` : `
-                        <nui-select searchable id="cfg-cleanup-model">
-                            <select>
-                                <option value="">Select model...</option>
-                                ${models.map(m => `<option value="${escapeAttr(m)}" ${m === settings.cleanupModel ? 'selected' : ''}>${escapeAttr(m)}</option>`).join('')}
-                            </select>
-                        </nui-select>
-                    `}
                 </nui-input-group>
             </div>
             <div class="settings-section">
@@ -232,11 +204,9 @@ async function openAppSettingsDialog() {
         const btn = e.target.closest('button[data-value]');
         if (!btn || btn.dataset.value !== 'save') return;
         const q = (sel) => dialog.querySelector(sel);
-        const modelEl = q('#cfg-cleanup-model') || q('#cfg-cleanup-model select');
         captured = {
             llmGatewayUrl: (q('#cfg-llm-url')?.value || '').trim(),
             llmGatewayApiKey: (q('#cfg-llm-key')?.value || '').trim(),
-            cleanupModel: modelEl ? (modelEl.value || '').trim() : '',
             nspeechUrl: (q('#cfg-nspeech-url')?.value || '').trim(),
             nvoiceUrl: (q('#cfg-nvoice-url')?.value || '').trim()
         };

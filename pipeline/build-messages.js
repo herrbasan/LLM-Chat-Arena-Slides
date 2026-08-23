@@ -8,18 +8,15 @@
 // TTS and alignment operate on. No slides are stored; slide layout is
 // computed at runtime by the browser.
 //
-// Text cleaning happens in two stages:
-//   1. pipeline/clean.js (LLM gateway call per message) — content-level
-//      cleanup: client noise, stage directions, other artifacts.
-//      Pass { skipClean: true } to bypass (e.g. for quick reimports).
-//   2. nSpeech /v1/text/clean per message, BEFORE splitting — this makes
-//      the stored paragraph text the exact string TTS will speak and
-//      alignment will constrain to. Render never re-cleans. Unspeakable
-//      paragraphs (dividers like '---' clean to empty) are dropped here.
+// Text cleaning: nSpeech /v1/text/clean per message, BEFORE splitting —
+// this makes the stored paragraph text the exact string TTS will speak
+// and alignment will constrain to. Render never re-cleans. Unspeakable
+// paragraphs (dividers like '---' clean to empty) are dropped here.
+// There is no LLM pass: the models' words are the artifact — stage
+// directions and all stay in the transcript (decided 2026-08-23).
 
 const fs = require('fs');
 const path = require('path');
-const { cleanAllMessages } = require('./clean.js');
 const { parseArenaExport } = require('./importer.js');
 const { buildOpeningSlides, buildEndSlide } = require('./build-deck.js');
 const nspeech = require('../server/nspeech.js');
@@ -124,7 +121,7 @@ async function buildMessages(source, progress, nspeechUrl) {
  * @param {string|null} outputDir — where to write the project JSON. null = skip.
  * @param {Function} [progress] — (stage, message, pct) => void
  * @param {Object} [options]
- * @param {boolean} [options.skipClean] — skip LLM text cleaning (default false)
+ * @param {Object} [options.settings] — app settings (uses nspeechUrl)
  * @returns {Object} v3 project: { version: 3, source, voiceMapping, messages[] }
  */
 async function buildProject(sourceData, outputDir = null, progress = () => {}, options = {}) {
@@ -162,21 +159,7 @@ async function buildProject(sourceData, outputDir = null, progress = () => {}, o
     // passes it via options.settings; the CLI falls back to env/default.
     const nspeechUrl = options.settings?.nspeechUrl || process.env.NSPEECH_URL || 'http://192.168.0.100:2233';
 
-    // ── Step 1: Clean message text via LLM ─────────────────────
-    const skipClean = options.skipClean === true || options.useLLM === false;
-    if (!skipClean) {
-        progress('clean', `Cleaning ${source.messages.length} messages via LLM…`, 15);
-        // settings: optional runtime overrides (LLM gateway URL, model,
-        // API key). When called from the server, options.settings
-        // carries the current app settings; the CLI doesn't pass it.
-        await cleanAllMessages(source.messages, (i, total, speaker, cleaned, cached) => {
-            progress('clean', `Cleaning message ${i}/${total} (${speaker})`, 15 + Math.floor((i / total) * 10));
-        }, options.settings || {});
-    } else {
-        progress('clean', 'Skipping LLM text cleaning (--skip-clean)', 20);
-    }
-
-    // ── Step 2: nSpeech clean + split messages into paragraphs ──
+    // ── nSpeech clean + split messages into paragraphs ──
     progress('messages', `Splitting messages into paragraphs…`, 25);
     const conversationMessages = await buildMessages(source, progress, nspeechUrl);
 
