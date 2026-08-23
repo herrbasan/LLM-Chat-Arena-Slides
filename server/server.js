@@ -1563,13 +1563,10 @@ app.use(express.static(path.join(__dirname, '../web')));
 // Serve the NUI components directly mapping to /nui
 app.use('/nui', express.static(path.join(__dirname, '../modules/nui_wc2/NUI')));
 
-// The standalone export player (loads any exported project via ?src=)
+// The standalone export player (loads any exported project via ?src=).
+// Fully self-contained: export-template/ includes its own vendored NUI
+// runtime under nui/ — refresh it by re-copying from the submodule.
 app.use('/player', express.static(EXPORT_TEMPLATE_ROOT));
-// Its NUI runtime is served straight from the submodule — no vendored
-// copies that could drift (for static hosting, copy NUI/{nui.js,
-// css/nui-theme.css, assets/material-icons-sprite.svg} next to the
-// player as nui/).
-app.use('/player/nui', express.static(path.join(__dirname, '../modules/nui_wc2/NUI')));
 
 // Exported project data (project.json + audio) for the player
 app.use('/exports', express.static(path.join(dbPath, 'exports')));

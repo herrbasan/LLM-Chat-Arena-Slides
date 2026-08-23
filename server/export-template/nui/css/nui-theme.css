@@ -1,0 +1,4926 @@
+:root {
+	--nui-theme: "slate";
+	--nui-version: "3.0.0";
+
+	/* Foundation: body font-size defines what 1rem equals throughout the system */
+	--nui-rem-base: 16px;
+
+	--nui-space: 1rem;
+	--nui-space-eighth: calc(var(--nui-space) / 8);
+	--nui-space-quarter: calc(var(--nui-space) / 4);
+	--nui-space-half: calc(var(--nui-space) / 2);
+	--nui-space-double: calc(var(--nui-space) * 2);
+	--nui-space-triple: calc(var(--nui-space) * 3);
+	--nui-space-quadruple: calc(var(--nui-space) * 4);
+
+	--space-scrollbar-width: 0.5rem;
+	--space-page-maxwidth: 56rem;
+	--nui-form-row-height: 2.5rem;
+	
+	--font-size-base: 1rem;
+	--font-size-xsmall: 0.8rem;
+	--font-size-small: 0.9rem;
+	--font-size-medium: 1.2rem;
+	--font-size-large: 1.5rem;
+	--font-size-xlarge: 2rem;
+
+	--icon-size: 1.2rem;
+	--text-color: light-dark(rgb(30, 30, 30), rgb(230, 230, 230));
+	--text-color-dim: light-dark(rgb(90, 90, 90), rgb(180, 180, 180));
+	--color-highlight: light-dark(rgb(76, 132, 229), rgb(76, 132, 229));
+	--color-highlight-dim: light-dark(rgb(67, 112, 191), rgb(67, 112, 191));
+	--color-accent: var(--color-highlight);
+	--color-accent-dim: var(--color-highlight-dim);
+	accent-color: var(--color-highlight);
+
+	--color-banner-bg: light-dark(var(--color-highlight-dim), var(--color-shade4));
+	--color-banner-text: light-dark(var(--color-white), var(--color-white));
+	--color-banner-progress: light-dark(rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.3));
+
+	--shadow-color: light-dark(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.4));
+	--shadow-radius0: var(--nui-space-half);
+	--shadow-radius1: var(--nui-space);
+	
+	--system-ui: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+}
+
+/* ################################# UTILITY CLASSES */
+
+.nui-hidden,
+[hidden] {
+	display: none !important;
+}
+
+:root {
+	--color-base: light-dark(rgb(255, 255, 255), rgb(20, 20, 20));
+	--color-contrast: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));
+	--color-shade1: light-dark(rgb(250, 250, 250), rgb(30, 30, 30));
+	--color-shade2: light-dark(rgb(240, 240, 240), rgb(40, 40, 40));
+	--color-shade3: light-dark(rgb(230, 230, 230), rgb(60, 60, 60));
+	--color-shade4: light-dark(rgb(210, 210, 210), rgb(80, 80, 80));
+	--color-shade5: light-dark(rgb(128, 128, 128), rgb(128, 128, 128));
+	--color-shade6: light-dark(rgb(100, 100, 100), rgb(160, 160, 160));
+	--color-shade7: light-dark(rgb(80, 80, 80), rgb(180, 180, 180));
+	--color-shade8: light-dark(rgb(60, 60, 60), rgb(200, 200, 200));
+	--color-shade9: light-dark(rgb(40, 40, 40), rgb(220, 220, 220));
+	--color-white: light-dark(rgb(255, 255, 255), rgb(255, 255, 255));
+	--color-black: light-dark(rgb(0, 0, 0), rgb(0, 0, 0));
+	
+	--border-thickness: thin;
+	--border-radius1: var(--nui-space-eighth);
+	--border-radius2: var(--nui-space-quarter);
+	--border-radius3: var(--nui-space-half);
+	--border-shade1: light-dark(rgb(235, 235, 235), rgb(45, 45, 45));
+	--border-shade2: light-dark(rgb(220, 220, 220), rgb(55, 55, 55));
+	--border-shade3: light-dark(rgb(190, 190, 190), rgb(70, 70, 70));
+	--border-shade4: light-dark(rgb(120, 120, 120), rgb(80, 80, 80));
+
+	--color-text: var(--color-contrast);
+	--color-text-dim: var(--color-shade7);
+	--color-text-muted: var(--color-shade6);
+	--color-text-subtle: var(--color-shade5);
+
+	--sidebar-width: 21rem;
+	--app-header-height: 4rem;
+	--footer-height: var(--nui-space-double);
+
+	/* Breakpoints - use sparingly, only for fundamental layout changes */
+	/* Pixels used intentionally: viewport size is independent of font size */
+	--nui-breakpoint-mobile: 320px;
+	--nui-breakpoint-tablet: 640px;
+}
+
+:root {
+	--palette-gray: light-dark(rgb(100, 100, 100), rgb(130, 130, 130));
+	--palette-gray-hi: light-dark(rgb(120, 120, 120), rgb(150, 150, 150));
+	--palette-mark: light-dark(rgb(180, 160, 40), rgb(203, 184, 55));
+	--palette-mark-hi: light-dark(rgb(170, 150, 60), rgb(197, 181, 83));
+	--palette-activate: light-dark(rgb(40, 120, 30), rgb(29, 171, 10));
+	--palette-activate-hi: light-dark(rgb(60, 150, 50), rgb(41, 228, 17));
+	--palette-alert: light-dark(rgb(160, 25, 25), rgb(181, 36, 36));
+	--palette-alert-hi: light-dark(rgb(200, 50, 50), rgb(222, 61, 61));
+}
+
+/* Color scheme preference - defaults to user's system preference */
+:root {
+	color-scheme: light dark;
+}
+
+/* =============================================================================
+   ACCESSIBILITY FOUNDATIONS
+   ============================================================================= */
+
+/* Respect user's motion preferences */
+@media (prefers-reduced-motion: reduce) {
+
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}
+
+/* Text box trim - toggle with Ctrl+Alt+T */
+:root[data-text-box-trim="true"] * {
+	text-box: trim-start !important;
+}
+
+:root[data-text-box-trim="true"] button {
+	text-box: trim-both !important;
+}
+
+nui-page:focus,
+.content-page:focus {
+	outline: none;
+}
+
+/* Skip links for keyboard navigation */
+nui-skip-links {
+	display: block;
+	position: absolute;
+	top: var(--nui-space);
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 10000;
+	pointer-events: none;
+}
+
+nui-skip-links .skip-link {
+	position: absolute;
+	top: 0;
+	left: 50%;
+	transform: translateX(-50%) translateY(-100%);
+	opacity: 0;
+	background: var(--color-highlight);
+	color: var(--color-white);
+	padding: var(--nui-space-half) var(--nui-space);
+	text-decoration: none;
+	border-radius: var(--border-radius2);
+	font-weight: 500;
+	white-space: nowrap;
+	box-shadow: 0 4px 6px var(--shadow-color);
+	transition: transform 0.2s ease-out, opacity 0.2s ease-out;
+	pointer-events: auto;
+}
+
+nui-skip-links .skip-link:focus {
+	transform: translateX(-50%) translateY(0);
+	opacity: 1;
+	outline: 2px solid var(--color-white);
+	outline-offset: 2px;
+}
+
+/* Ensure focus is visible for keyboard users */
+:focus-visible {
+	outline: 2px solid var(--color-highlight);
+	outline-offset: 2px;
+}
+
+/* Screen reader only content */
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border-width: 0;
+}
+
+layout,
+item {
+	display: contents;
+}
+
+/* Set rem base on html (rem units are relative to :root/html, not body) */
+html {
+	font-size: var(--nui-rem-base);
+}
+
+/* Prevent scroll in app layout */
+html:has(nui-app[data-layout="app"]),
+body:has(nui-app[data-layout="app"]) {
+	overflow: hidden;
+	position: fixed;
+	width: 100vw;
+	height: 100dvh;
+	margin: 0;
+	padding: 0;
+}
+
+body {
+	margin: 0;
+	padding: 0;
+	font-family: var(--system-ui);
+	letter-spacing: 0.02rem;
+	background: light-dark(var(--color-shade2), var(--color-shade1));
+	color: var(--text-color);
+	line-height: 2;
+	touch-action: pan-x pan-y;
+	-webkit-text-size-adjust: 100%;
+}
+
+p {
+	margin-block: 0;
+	margin: 0;
+	margin-block-end: var(--nui-space);
+}
+
+a {
+	color: var(--color-text-dim);
+	text-decoration: none;
+	text-decoration-thickness: thin;
+	text-decoration-color: var(--border-shade4);
+	text-underline-offset: 0.15rem;
+	transition: color 0.2s;
+}
+
+p > a::before {
+	--arrow-size: 0.2rem;
+	content: '';
+	display: inline-block;
+	width: var(--arrow-size);
+	height: var(--arrow-size);
+	border-right: var(--arrow-size) solid var(--color-text-dim);
+	border-bottom: var(--arrow-size) solid var(--color-text-dim);
+	transform: rotate(-45deg);
+	margin-right: calc(var(--arrow-size) + 0.1rem);
+	margin-bottom: var(--arrow-size);
+	opacity: 0.5;
+	transition: border-color 0.05s, opacity 0.05s;
+}
+
+a:hover, a:focus {
+	color: var(--color-highlight);
+	text-decoration: underline;
+}
+
+a:hover::before, a:focus::before {
+	border-color: var(--color-highlight);
+	opacity: 1;
+}
+
+pre {
+	font-family: monospace;
+	background: light-dark(var(--color-shade1), var(--color-shade2));
+	border-radius: var(--border-radius1);
+	border: solid var(--border-thickness) var(--border-shade2);
+	overflow-x: auto;
+	padding: var(--nui-space);
+	tab-size: 4; /* Control tab width rendering (default: 8) */
+}
+
+blockquote {
+	margin: var(--nui-space) 0;
+	padding: var(--nui-space-half) var(--nui-space);
+	border-left: 4px solid var(--color-highlight);
+	background: var(--color-shade2);
+	color: var(--color-text-dim);
+	border-radius: 0 var(--border-radius1) var(--border-radius1) 0;
+}
+
+h1:focus,
+div:focus,
+p:focus,
+main:focus {
+	outline: none;
+}
+
+footer {
+	font-size: var(--font-size-small);
+	color: var(--color-text-muted);
+	text-align: center;
+	padding: var(--nui-space);
+	border-top: solid var(--border-thickness) var(--border-shade2);
+	margin-top: auto;
+}
+
+footer h1 {
+	font-size: var(--font-size-base);
+}
+
+h1 {
+	color: var(--color-highlight);
+	font-size: var(--font-size-xlarge);
+	line-height: 2.2rem;
+	margin-bottom: var(--nui-space);
+	font-weight: 300;
+}
+
+h2 {
+	color: var(--color-highlight);
+	font-size: var(--font-size-large);
+	line-height: 1.8rem;
+	font-weight: 300;
+}
+
+h3 {
+	font-weight: 400;
+	font-size: var(--font-size-medium);
+	line-height: 2rem;
+	color: var(--color-text);
+}
+
+h4 {
+	font-weight: 600;
+	font-size: var(--font-size-medium);
+	line-height: 1.5rem;
+}
+
+h5 {
+	font-weight: 600;
+	font-size: var(--font-size-base);
+}
+
+h6 {
+	font-weight: 600;
+	font-size: var(--font-size-small);
+}
+
+hr {
+	border: none;
+	border-top: solid var(--border-thickness) var(--color-shade4);
+	margin: var(--nui-space) 0;
+}
+
+iframe {
+	border: solid var(--border-thickness) var(--border-shade2);
+}
+
+
+nui-sidebar nui-link-list {
+	margin-top: var(--nui-space);
+	padding: 0;
+}
+
+
+nui-link-list {
+	display: block;
+	font-size: var(--font-size-small);
+}
+
+nui-link-list ul {
+	list-style: none;
+	margin: 0;
+	margin-bottom: var(--nui-space);
+	padding-left: var(--nui-space);
+	border-radius: var(--nui-space-quarter);
+}
+
+nui-link-list ul.root-item {
+	padding-left: var(--nui-space);
+}
+
+nui-link-list nui-column-flow>ul {
+	padding-left: 0;
+	padding: var(--nui-space);
+	border: solid var(--border-thickness) var(--border-shade3);
+}
+
+nui-link-list ul li {
+	cursor: pointer;
+	user-select: none;
+	color: var(--text-color);
+	transition: opacity 0.2s, background-color 0.2s;
+	text-decoration: none;
+	display: flex;
+	min-height: var(--nui-space-double);
+}
+
+nui-link-list:first-child ul li.group-header {
+	font-weight: 200;
+	color: var(--color-highlight);
+}
+
+nui-link-list ul li a,
+nui-link-list ul li.group-header button.group-toggle {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	align-self: stretch;
+	gap: var(--nui-space-half);
+	text-decoration: none;
+	color: inherit;
+	min-width: 0;
+	background: none;
+	border: none;
+	padding: 0;
+	cursor: pointer;
+	font: inherit;
+	text-align: left;
+}
+
+
+/* Override base button styles for group-toggle */
+nui-link-list ul li.group-header button.group-toggle {
+	min-height: unset;
+	border-radius: 0;
+	text-transform: none;
+}
+
+nui-link-list ul li.group-header button.group-toggle:active {
+	transform: none;
+}
+
+nui-link-list ul li a nui-icon,
+nui-link-list ul li.group-header button.group-toggle nui-icon {
+	flex-shrink: 0;
+}
+
+nui-link-list nui-column-flow ul:last-of-type {
+	margin: 0;
+}
+
+
+nui-link-list ul {
+	position: relative;
+}
+
+nui-link-list ul>ul::before {
+	content: '⤷';
+	position: absolute;
+	left: 0;
+	color: var(--color-shade4);
+}
+
+nui-link-list ul li a::before {
+	display: none;
+}
+
+nui-link-list ul li span {
+	flex: 1;
+	cursor: inherit;
+}
+
+nui-link-list ul li button.action {
+	background: none;
+	border: none;
+	color: inherit;
+	padding: var(--nui-space-quarter);
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+}
+
+nui-link-list ul li button.action:hover {
+	background-color: var(--color-shade4);
+	border-radius: var(--nui-radius);
+}
+
+nui-link-list li.separator hr {
+	display: none;
+}
+
+nui-link-list li.separator {
+	display: block;
+	border-top: solid var(--border-thickness) var(--border-shade4);
+	margin-top: var(--nui-space-half);
+	margin-bottom: var(--nui-space-half);
+	padding: 0;
+	height: 0;
+	min-height: 0;
+}
+
+nui-link-list[mode="fold"]:first-child ul li.group-header {
+	font-weight: unset;
+	font-size: unset;
+	color: var(--text-color-dim);
+}
+
+nui-link-list[mode="fold"] {
+	background-color: transparent;
+	padding: 0;
+}
+
+nui-link-list[mode="fold"] li {
+	padding: 0;
+	color: currentColor;
+	text-decoration: none;
+	cursor: pointer;
+}
+
+nui-link-list[mode="fold"] li.list-item a:focus,
+nui-link-list[mode="fold"] li.group-header button.group-toggle:focus {
+	outline: 0;
+}
+
+nui-link-list[mode="fold"] li.list-item a:focus-visible,
+nui-link-list[mode="fold"] li.group-header button.group-toggle:focus-visible {
+	outline: 0;
+}
+
+nui-link-list[mode="fold"] li.list-item a:focus-visible::before,
+nui-link-list[mode="fold"] li.group-header button.group-toggle:focus-visible::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	border: 2px solid var(--color-highlight);
+}
+
+nui-link-list[mode="fold"] li:hover {
+	color: var(--color-contrast);
+	background-color: var(--color-shade2);
+}
+
+/* Ensure first item also gets hover color */
+nui-link-list[mode="fold"]:first-child ul li.group-header:hover {
+	color: var(--color-contrast);
+}
+
+/* Lighter hover when inside side-nav */
+nui-sidebar nui-link-list[mode="fold"] li:hover {
+	background-color: var(--color-shade3);
+}
+
+nui-link-list[mode="fold"] li.list-item {
+	position: relative;
+}
+
+nui-link-list[mode="fold"] li.list-item.active {
+	color: light-dark(var(--color-highlight), var(--color-highlight));
+	background-color: light-dark(var(--color-shade3), var(--color-shade3));
+}
+
+/* Ensure first item also gets active color */
+nui-link-list[mode="fold"]:first-child ul li.group-header.active {
+	color: light-dark(var(--color-highlight), var(--color-highlight));
+}
+
+nui-link-list[mode="fold"] li.list-item.active::after {
+	content: '';
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	width: 0.3rem;
+	background-color: var(--color-highlight);
+}
+
+nui-link-list[mode="fold"] li.list-item.active::before {
+	content: '';
+	position: absolute;
+	right: var(--nui-space);
+	top: 50%;
+	width: 0.3rem;
+	height: 0.3rem;
+	border-right: 2px solid var(--color-highlight);
+	border-bottom: 2px solid var(--color-highlight);
+	transform: translateY(-60%) rotate(-45deg);
+}
+
+nui-link-list[mode="fold"] li.list-item a {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+}
+
+nui-link-list[mode="fold"] ul {
+	margin: 0;
+	padding: 0;
+	background-color: transparent;
+}
+
+nui-link-list[mode="fold"] ul.root-item {
+	padding-left: 0;
+	border: none;
+}
+
+nui-link-list[mode="fold"] ul.root-item > li {
+	padding-left: 0;
+}
+
+nui-link-list[mode="fold"] ul.root-item > li > a {
+	padding-left: var(--nui-space);
+}
+
+nui-link-list[mode="fold"] ul li {
+	display: flex;
+	align-items: center;
+	gap: var(--nui-space-half);
+	min-height: var(--nui-space-triple);
+	cursor: pointer;
+	user-select: none;
+	color: var(--text-color-dim);
+	transition: opacity 0.2s, background-color 0.2s;
+}
+
+nui-link-list[mode="fold"] ul li.group-header button.group-toggle::after {
+	content: '';
+	width: 0;
+	height: 0;
+	border-top: 5px solid transparent;
+	border-bottom: 5px solid transparent;
+	border-left: 7px solid currentColor;
+	opacity: 0.2;
+	transition: all 0.2s;
+	position: absolute;
+	right: var(--nui-space);
+}
+
+nui-link-list[mode="fold"] ul li.group-header button.group-toggle[aria-expanded="true"]::after {
+	transform: rotate(90deg);
+	border-left-color: var(--color-highlight);
+	opacity: 1;
+}
+
+nui-link-list[mode="fold"] ul li a,
+nui-link-list[mode="fold"] ul li.group-header button.group-toggle {
+	width: 100%;
+	height: 100%;
+	display: flex;
+	align-items: center;
+	gap: var(--nui-space-half);
+	text-decoration: none;
+	color: inherit;
+}
+
+nui-link-list[mode="fold"] ul li.group-header {
+	position: relative;
+}
+
+nui-link-list[mode="fold"] ul li.group-header button.group-toggle {
+	position: absolute;
+	inset: 0;
+	padding-left: var(--nui-space);
+}
+
+/* Container for collapsible group items - fold mode only */
+nui-link-list[mode="fold"] .group-items {
+	overflow: hidden;
+	transition: height 0.2s ease-out, visibility 0s 0.2s;
+	height: 0;
+	visibility: hidden;
+}
+
+/* Background for expanded group container - fold mode only */
+nui-link-list[mode="fold"] .group-header:has(button[aria-expanded="true"])+.group-items {
+	background-color: light-dark(rgb(255, 255, 255), rgb(30, 30, 30));
+	visibility: visible;
+	transition: height 0.2s ease-out, visibility 0s 0s;
+}
+
+/* Indentation for items in expanded groups - fold mode only */
+nui-link-list[mode="fold"] .group-items>li a span {
+	padding-left: 2.7rem;
+}
+
+/* Fold mode only - expandable states */
+nui-link-list[mode="fold"] ul li.group-header:has(button[aria-expanded="true"]) {
+	opacity: 1;
+	background-color: light-dark(rgb(240, 240, 240), rgb(48, 48, 48));
+}
+
+nui-link-list[mode="fold"] ul li.group-header:has(button[aria-expanded="true"])+ul>li a:hover {
+	background-color: light-dark(rgb(240, 240, 240), rgb(55, 55, 55));
+}
+
+nui-link-list[mode="fold"] ul li.group-header:has(button[aria-expanded="true"])+ul>li a.active {
+	background-color: light-dark(rgb(230, 235, 240), rgb(60, 65, 70));
+	border-left: 0.3rem solid var(--color-highlight);
+}
+
+nui-link-list[mode="fold"] li.separator hr {
+	display: none;
+}
+
+nui-link-list[mode="fold"] li.separator {
+	border-top: solid var(--border-thickness) var(--border-shade4);
+	margin-top: var(--nui-space-half);
+	margin-bottom: var(--nui-space-half);
+	padding: 0;
+	height: 0;
+	min-height: 0;
+}
+
+ul li.group-header>span:first-child {
+	width: 100%;
+	height: 100%;
+	display: flex;
+	align-items: center;
+	gap: var(--nui-space-half);
+	text-decoration: none;
+	color: inherit;
+}
+
+
+/* =============================================================================
+   BUTTON COMPONENT
+   ============================================================================= */
+
+nui-button {
+	display: inline-block;
+	margin: 0;
+}
+
+nui-button-container {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-start;
+	width: 100%;
+	gap: var(--nui-space-half);
+}
+
+nui-button-container.align-end {
+	justify-content: flex-end;
+}
+
+nui-button-container.align-center {
+	justify-content: center;
+}
+
+nui-button-container.align-between {
+	justify-content: space-between;
+}
+
+nui-button-container.fill {
+	flex-wrap: nowrap;
+}
+
+nui-button-container.fill>* {
+	flex: 1 1 0;
+}
+
+nui-button-container.fill>nui-button {
+	display: flex;
+}
+
+nui-button-container.fill>nui-button>button {
+	flex: 1;
+	min-width: 0;
+}
+
+nui-button-container.direction-column {
+	flex-direction: column;
+	flex-wrap: nowrap;
+}
+
+nui-button-container.direction-column.align-start {
+	align-items: flex-start;
+}
+
+nui-button-container.direction-column.align-center {
+	align-items: center;
+}
+
+nui-button-container.direction-column.align-end {
+	align-items: flex-end;
+}
+
+nui-button-container.direction-column.align-stretch {
+	align-items: stretch;
+}
+
+nui-button-container.gap-none {
+	gap: 0;
+}
+
+nui-button-container.gap-small {
+	gap: var(--nui-space-half);
+}
+
+nui-button-container.gap-medium {
+	gap: var(--nui-space);
+}
+
+nui-button-container.gap-large {
+	gap: var(--nui-space-double);
+}
+
+/* 
+============================================================================= 
+   Segmented Control Mode for Button Container
+============================================================================= 
+*/
+
+nui-button-container[variant="segmented"],
+nui-button-container[mode="segmented"] {
+	gap: 0;
+	display: inline-flex;
+	border-radius: var(--border-radius1);
+}
+
+nui-button-container[variant="segmented"] nui-button button,
+nui-button-container[mode="segmented"] nui-button button {
+	border-radius: 0;
+	min-width: unset;
+	border-right: 1px solid var(--color-shade3);
+	background-color: var(--color-base);
+	color: var(--color-text);
+}
+
+nui-button-container[variant="segmented"] nui-button:last-child button,
+nui-button-container[mode="segmented"] nui-button:last-child button {
+	border-right: none;
+}
+
+nui-button-container[variant="segmented"] nui-button:first-child button,
+nui-button-container[mode="segmented"] nui-button:first-child button {
+	border-top-left-radius: var(--border-radius1);
+	border-bottom-left-radius: var(--border-radius1);
+}
+
+nui-button-container[variant="segmented"] nui-button:last-child button,
+nui-button-container[mode="segmented"] nui-button:last-child button {
+	border-top-right-radius: var(--border-radius1);
+	border-bottom-right-radius: var(--border-radius1);
+}
+
+nui-button-container[variant="segmented"] nui-button:hover button,
+nui-button-container[mode="segmented"] nui-button:hover button {
+	background-color: var(--color-shade2);
+}
+
+nui-button-container[variant="segmented"] nui-button[state="active"] button,
+nui-button-container[mode="segmented"] nui-button[state="active"] button {
+	background-color: var(--color-highlight);
+	color: var(--color-white);
+	border-color: var(--color-highlight);
+}
+
+/* nui-button enhancements - builds on base button styles */
+nui-button button {
+	min-width: 6rem;
+	font-size: var(--font-size-xsmall);
+	text-transform: uppercase;
+}
+
+/* Button flash effect on click */
+nui-button button::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background-color: white;
+	opacity: 0;
+	pointer-events: none;
+	border-radius: inherit;
+}
+
+nui-button button:active::after {
+	opacity: 0.2;
+}
+
+nui-button button:not(:active)::after {
+	transition: opacity 0.5s;
+}
+
+/* Button variant extensions */
+nui-button[variant="outline"] button {
+	background-color: transparent;
+	border: solid var(--border-thickness) var(--palette-gray);
+	color: var(--color-text-dim);
+}
+
+nui-button[variant="outline"] button:hover {
+	background-color: var(--palette-gray);
+	border-color: transparent;
+	color: var(--color-white);
+}
+
+nui-button[variant="delete"] button,
+nui-button[variant="danger"] button {
+	background-color: var(--palette-alert);
+}
+
+nui-button[variant="delete"] button:hover,
+nui-button[variant="danger"] button:hover {
+	background-color: var(--palette-alert-hi);
+}
+
+nui-button[variant="warning"] button {
+	background-color: var(--palette-mark);
+}
+
+nui-button[variant="warning"] button:hover {
+	background-color: var(--palette-mark-hi);
+}
+
+/* Icon-only button */
+nui-button.icon-only button,
+nui-button[variant="icon"] button {
+	background-color: transparent;
+	border: none;
+	padding: 0;
+	min-width: var(--nui-space-double);
+	min-height: var(--nui-space-double);
+	color: var(--color-text-dim);
+}
+
+nui-button.icon-only button:hover,
+nui-button[variant="icon"] button:hover {
+	color: var(--color-highlight);
+	fill: var(--color-highlight);
+	background-color: var(--color-shade3);
+}
+
+
+/* Ghost button (text only, subtle) */
+nui-button[variant="ghost"] button {
+	background-color: transparent;
+	border: none;
+	color: var(--color-text-dim);
+}
+
+nui-button[variant="ghost"] button:hover {
+	background-color: var(--color-shade3);
+	color: var(--color-text);
+}
+
+/* Icon styling within buttons */
+nui-button button nui-icon {
+	width: 1.2em;
+	height: 1.2em;
+	flex-shrink: 0;
+}
+
+/* Progress state */
+nui-button[state="loading"] button {
+	background: var(--color-shade4) !important;
+	border-color: transparent !important;
+	pointer-events: none;
+	color: transparent !important;
+}
+
+nui-button[state="loading"] button > * {
+	opacity: 0;
+}
+
+nui-button[state="loading"] button::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	margin: auto;
+	width: 0.9rem;
+	height: 0.9rem;
+	border: 3px solid var(--color-white);
+	border-top-color: transparent;
+	border-radius: 50%;
+	animation: nui-button-spin 0.8s linear infinite;
+	opacity: 1;
+}
+
+@keyframes nui-button-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+
+/* =============================================================================
+   BADGE COMPONENT
+   ============================================================================= */
+
+nui-badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 0.75rem;
+	font-weight: bold;
+	line-height: 1;
+	padding: 0.25rem 0.6rem;
+	border-radius: var(--border-radius1);
+	background-color: var(--color-base);
+	color: var(--color-contrast);
+	border: var(--border-thickness) solid var(--border-shade3);
+	white-space: nowrap;
+	vertical-align: middle;
+	text-transform: uppercase;
+}
+
+/* Badge variants */
+nui-badge[variant="primary"] {
+	border-left: 6px solid var(--color-highlight);
+}
+
+nui-badge[variant="success"] {
+	border-left: 6px solid var(--palette-activate);
+}
+
+nui-badge[variant="danger"] {
+	border-left: 6px solid var(--palette-alert);
+}
+
+nui-badge[variant="warning"] {
+	border-left: 6px solid var(--palette-mark);
+}
+
+nui-badge[variant="info"] {
+	border-left: 6px solid var(--color-highlight-dim);
+}
+
+
+/* =============================================================================
+   ICON COMPONENT
+   ============================================================================= */
+
+nui-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--icon-size);
+	height: var(--icon-size);
+	color: var(--color-text);
+	flex-shrink: 0;
+	vertical-align: middle;
+	position: relative;
+}
+
+/* Icon in text flow - optically align with baseline when followed by text */
+p>nui-icon,
+span>nui-icon,
+a>nui-icon {
+	vertical-align: middle;
+	position: relative;
+	top: -0.1rem;
+	margin-left: 0.1rem;
+	margin-right: 0.1rem;
+}
+
+
+
+/* Placeholder text shown in plain HTML mode (removed by JavaScript) */
+nui-icon:empty::before {
+	content: '○';
+	opacity: 0.5;
+}
+
+nui-icon svg {
+	width: 100%;
+	height: 100%;
+	padding: 0;
+	margin: 0;
+	fill: currentColor;
+}
+
+/* =============================================================================
+   APP LAYOUT
+   ============================================================================= */
+
+nui-app[data-layout="app"] {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+}
+
+nui-app[data-layout="app"] nui-app-header:not(.demo-relative):not([demo]) {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: var(--app-header-height);
+	background: light-dark(var(--color-shade5), var(--color-shade2));
+	border-bottom: solid var(--border-thickness) var(--border-shade2);
+	padding: 0 var(--nui-space);
+	box-shadow: 0 0 var(--shadow-radius1) 0 var(--shadow-color);
+	z-index: 200;
+	box-sizing: border-box;
+}
+
+nui-app-header, 
+nui-app-header > header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	width: 100%;
+	height: 100%;
+	line-height: 1;
+	gap: var(--nui-space);
+}
+
+/* Demo/standalone headers (not in app shell positioning) */
+nui-app-header.demo-relative,
+nui-app-header[demo] {
+	position: relative;
+	height: var(--app-header-height);
+	background: light-dark(var(--color-shade5), var(--color-shade2));
+	border-bottom: solid var(--border-thickness) var(--border-shade2);
+	padding: 0 var(--nui-space);
+	box-sizing: border-box;
+}
+
+/* De-nest wrapper container if present (nui-app-header often wraps a <header>) */
+nui-app-header > [slot],
+nui-app-header > header > [slot],
+nui-app-header > .left,
+nui-app-header > .right,
+nui-app-header > header > .left,
+nui-app-header > header > .right,
+nui-app-header > header > .center {
+	display: flex;
+	align-items: center;
+	gap: var(--nui-space-half);
+}
+
+nui-app-header [slot="left"], nui-app-header .left {
+	justify-content: flex-start;
+	flex: 0 1 auto;
+}
+
+nui-app-header [slot="center"], nui-app-header .center {
+	justify-content: center;
+	flex: 1 1 auto;
+}
+
+nui-app-header [slot="right"], nui-app-header .right {
+	justify-content: flex-end;
+	flex: 0 1 auto;
+}
+
+nui-app-header h1,
+nui-app-header .title {
+	margin: 0;
+	padding: 0;
+	font-size: var(--font-size-base);
+	font-weight: 400; /* Bumping slightly from 200 for better readability */
+	color: light-dark(var(--color-white), var(--color-white));
+	line-height: 1;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+nui-app-header button svg,
+nui-app-header nui-icon {
+	color: light-dark(var(--color-white), var(--color-white));
+}
+
+/* Integrated Status Badge */
+[data-badge] {
+	position: relative;
+}
+
+[data-badge]::after {
+	content: attr(data-badge);
+	position: absolute;
+	top: -8px;
+	right: -8px;
+	background: var(--palette-alert);
+	color: var(--color-white);
+	font-size: 0.65rem;
+	font-weight: bold;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	min-width: 1.25rem;
+	height: 1.25rem;
+	padding: 0 0.35rem;
+	border-radius: 9999px; /* Pill shape */
+	pointer-events: none;
+	z-index: 10;
+	border: 1px solid light-dark(rgba(0, 0, 0, 0.05), rgba(255, 255, 255, 0.05));
+	box-shadow: 0 2px 4px var(--shadow-color);
+}
+
+[data-badge=""]::after {
+	/* Dot mode when empty badge */
+	content: '';
+	min-width: 0.6rem;
+	height: 0.6rem;
+	padding: 0;
+	top: -2px;
+	right: -2px;
+}
+
+/* =============================================================================
+   SIDEBAR - Container styles (nui-sidebar)
+   ============================================================================= */
+
+nui-app[data-layout="app"] nui-sidebar {
+	position: absolute;
+	top: 0;
+	left: 0;
+	bottom: 0;
+	height: auto;
+	width: var(--sidebar-width);
+	background: var(--color-shade2);
+	padding: 0;
+	overflow-y: auto;
+	overflow-x: hidden;
+	box-shadow: 0 0 var(--shadow-radius1) var(--shadow-color);
+	border-right: var(--border-thickness) solid var(--border-shade1);
+	display: grid;
+	grid-template-rows: 1fr auto;
+	box-sizing: border-box;
+	z-index: 1;
+}
+
+nui-app[data-layout="app"].nui-ready nui-sidebar {
+	transition: transform 0.3s ease;
+}
+
+/* Side nav offset when top nav present */
+nui-app[data-layout="app"]:has(nui-app-header) nui-sidebar {
+	top: var(--app-header-height);
+}
+
+/* Side nav offset when footer present */
+nui-app[data-layout="app"]:has(nui-app-footer) nui-sidebar {
+	bottom: var(--footer-height);
+}
+
+
+
+
+/* =============================================================================
+   CONTENT AREA - nui-page
+   ============================================================================= */
+nui-page {
+	display: block;
+	width: 100%;
+	position: relative;
+}
+
+/* All children get padding */
+nui-page>* {
+	padding: var(--nui-space) var(--nui-space-double);
+	box-sizing: border-box;
+}
+
+/* Children without 'breakout' attribute are constrained for readability */
+nui-page>*:not([breakout]) {
+	max-width: var(--space-page-maxwidth);
+}
+
+/* Breakout elements: fill container width without causing overflow */
+nui-page>[breakout] {
+	max-width: 100%;
+	/* Reset horizontal padding - let the element handle its own spacing */
+	padding-left: 0;
+	padding-right: 0;
+}
+
+/* Backward compatibility - legacy class-based approach (deprecated) */
+nui-main>.content-page,
+nui-main>.content-feature {
+	display: block;
+	width: 100%;
+	position: relative;
+}
+
+nui-main>.content-page>*,
+nui-main>.content-feature>* {
+	padding: var(--nui-space) var(--nui-space-double);
+	box-sizing: border-box;
+}
+
+nui-main>.content-page>*:not([breakout]),
+nui-main>.content-feature>*:not([breakout]) {
+	max-width: var(--space-page-maxwidth);
+}
+
+nui-main>.content-page>[breakout],
+nui-main>.content-feature>[breakout] {
+	max-width: 100%;
+	padding-left: 0;
+	padding-right: 0;
+}
+
+
+nui-page nui-content {
+	padding: 0;
+	margin-top: var(--app-header-height);
+}
+
+nui-app[data-layout="app"] nui-content {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	transition: left 0.3s ease, right 0.3s ease;
+	overflow: hidden;
+	padding: 0;
+}
+
+/* Scroll container for content area */
+nui-app[data-layout="app"] nui-content>nui-main {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	overflow-y: auto;
+	overflow-x: auto;
+	box-sizing: border-box;
+}
+
+/* Content offset when top nav present */
+nui-app[data-layout="app"]:has(nui-app-header) nui-content {
+	top: var(--app-header-height);
+}
+
+/* Content offset when footer present */
+nui-app[data-layout="app"]:has(nui-app-footer) nui-content {
+	bottom: var(--footer-height);
+}
+
+/* Content offset when side nav forced */
+nui-app[data-layout="app"].has-sidebar.sidebar-forced nui-content {
+	left: var(--sidebar-width);
+}
+
+/* Content offset when right side nav forced */
+nui-app[data-layout="app"].has-sidebar-right.sidebar-right-forced nui-content {
+	right: var(--sidebar-width);
+}
+
+nui-app[data-layout="app"] nui-app-footer {
+	position: absolute;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	height: var(--footer-height);
+	background: var(--color-shade3);
+	color: var(--color-text-muted);
+	padding-top: 0;
+	padding-bottom: 0;
+	padding-left: var(--nui-space);
+	padding-right: var(--nui-space);
+	border-top: solid var(--border-thickness) var(--border-shade2);
+	display: flex;
+	align-items: center;
+	z-index: 200;
+	box-sizing: border-box;
+}
+
+nui-app[data-layout="app"] nui-app-footer footer {
+	margin: 0;
+	padding: 0;
+	border: none;
+}
+
+@media (max-width: 768px) {
+	nui-app[data-layout="app"] nui-app-footer {
+		display: none;
+	}
+	/* Reset footer offsets when hidden */
+	nui-app[data-layout="app"]:has(nui-app-footer) nui-sidebar,
+	nui-app[data-layout="app"]:has(nui-app-footer) nui-content {
+		bottom: 0;
+	}
+}
+
+/* Base side nav (left by default) */
+nui-app[data-layout="app"] nui-sidebar:not([position="right"]) {
+	transform: translateX(-100%);
+}
+nui-app[data-layout="app"].sidebar-closed nui-sidebar:not([position="right"]) {
+	transform: translateX(-100%);
+}
+nui-app[data-layout="app"].sidebar-open nui-sidebar:not([position="right"]) {
+	transform: translateX(0);
+	z-index: 100;
+}
+nui-app[data-layout="app"].sidebar-forced nui-sidebar:not([position="right"]) {
+	transform: translateX(0);
+}
+
+/* Right side nav */
+nui-app[data-layout="app"] nui-sidebar[position="right"] {
+	left: auto;
+	right: 0;
+	border-right: none;
+	border-left: var(--border-thickness) solid var(--border-shade1);
+	transform: translateX(100%);
+}
+nui-app[data-layout="app"].sidebar-right-closed nui-sidebar[position="right"] {
+	transform: translateX(100%);
+}
+nui-app[data-layout="app"].sidebar-right-open nui-sidebar[position="right"] {
+	transform: translateX(0);
+	z-index: 100;
+}
+nui-app[data-layout="app"].sidebar-right-forced nui-sidebar[position="right"] {
+	transform: translateX(0);
+}
+
+/* Backdrops */
+nui-app[data-layout="app"].sidebar-open::before,
+nui-app[data-layout="app"].sidebar-right-open::after {
+	content: '';
+	position: fixed;
+	top: var(--app-header-height);
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background: rgba(0, 0, 0, 0.5);
+	z-index: 99;
+}
+
+nui-app[data-layout="app"]:not(:has(nui-app-header)).sidebar-open::before,
+nui-app[data-layout="app"]:not(:has(nui-app-header)).sidebar-right-open::after {
+	top: 0;
+}
+
+/* Dim menu toggle button when sidebar is forced open */
+nui-app.sidebar-forced [data-action="toggle-sidebar"],
+nui-app.sidebar-forced [data-action="toggle-sidebar:left"] {
+	opacity: 0.3;
+	pointer-events: none;
+	cursor: default;
+}
+nui-app.sidebar-right-forced [data-action="toggle-sidebar:right"] {
+	opacity: 0.3;
+	pointer-events: none;
+	cursor: default;
+}
+
+/* =================================
+   nui-sidebar Component Styles
+   ================================= */
+
+nui-sidebar {
+	display: block;
+	width: var(--nui-sidebar-width, 16rem);
+	height: 100%;
+	background: var(--nui-sidebar-bg, rgb(40, 40, 40));
+	color: var(--nui-sidebar-text, rgb(200, 200, 200));
+	overflow-x: hidden;
+	overflow-y: auto;
+}
+
+
+/* =============================================================================
+   nui-layout Component
+   ============================================================================= */
+
+nui-layout {
+	display: block;
+}
+
+/* Mobile (Default - Stack) */
+nui-layout.nui-layout-grid {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: var(--nui-layout-gap, 1rem);
+}
+
+nui-layout.nui-layout-flow {
+	column-count: 1;
+	column-gap: var(--nui-layout-gap, 1rem);
+	column-fill: balance;
+}
+
+nui-layout.nui-layout-flow>* {
+	break-inside: avoid;
+	margin-bottom: var(--nui-layout-gap, 1rem);
+}
+
+/* Reset margins for grid items to prevent double gaps */
+nui-layout.nui-layout-grid>* {
+	margin-top: 0;
+	margin-bottom: 0;
+}
+
+/* Tablet (≥ 30rem / 480px) - Clamped to max 2 */
+@media (min-width: 30rem) {
+	nui-layout.nui-layout-grid {
+		grid-template-columns: repeat(var(--nui-layout-columns-tablet, 1), 1fr);
+	}
+
+	nui-layout.nui-layout-flow {
+		column-count: var(--nui-layout-count-tablet, 1);
+	}
+}
+
+/* Desktop (≥ 48rem / 768px) - Full columns */
+@media (min-width: 48rem) {
+	nui-layout.nui-layout-grid {
+		grid-template-columns: repeat(var(--nui-layout-columns, 1), 1fr);
+	}
+
+	nui-layout.nui-layout-flow {
+		column-count: var(--nui-layout-count, auto);
+		column-width: var(--nui-layout-width, auto);
+	}
+}
+
+/* =============================================================================
+   nui-column-flow Component (Deprecated - use nui-layout type="flow")
+   ============================================================================= */
+
+nui-column-flow {
+	display: block;
+	column-width: 18rem;
+	column-gap: var(--nui-space, 1rem);
+	column-fill: balance;
+}
+
+/* Tablet breakpoint: 640px (--nui-breakpoint-tablet) */
+@media (max-width: 640px) {
+	nui-column-flow {
+		column-count: 1;
+		column-width: auto;
+	}
+
+	nui-button-container.fill {
+		flex-wrap: wrap;
+	}
+
+	nui-button-container.fill>* {
+		flex: 1 1 100%;
+	}
+}
+
+nui-column-flow>* {
+	break-inside: avoid;
+	margin-bottom: var(--nui-space, 1rem);
+}
+
+/* =================================
+   nui-loading Component Styles
+   ================================= */
+
+nui-loading {
+	display: none;
+}
+
+nui-loading.active {
+	display: block;
+}
+
+/* Loading Bar Mode (top of page) */
+nui-loading[mode="bar"] {
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: 3px;
+	z-index: 9999;
+	pointer-events: none;
+}
+
+nui-loading[mode="bar"] .loading-bar {
+	width: 100%;
+	height: 100%;
+	background: transparent;
+	overflow: hidden;
+}
+
+nui-loading[mode="bar"] .loading-bar-progress {
+	height: 100%;
+	background: var(--color-highlight);
+	width: 0%;
+	animation: loading-bar-progress 2s ease-in-out infinite;
+}
+
+@keyframes loading-bar-progress {
+	0% {
+		width: 0%;
+		margin-left: 0%;
+	}
+
+	50% {
+		width: 70%;
+		margin-left: 15%;
+	}
+
+	100% {
+		width: 0%;
+		margin-left: 100%;
+	}
+}
+
+/* Loading Overlay Mode (full page) */
+nui-loading[mode="overlay"] {
+	position: fixed;
+	inset: 0;
+	z-index: 9999;
+	pointer-events: all;
+}
+
+nui-loading[mode="overlay"] .loading-overlay {
+	width: 100%;
+	height: 100%;
+	background: rgba(0, 0, 0, 0.7);
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--nui-space);
+}
+
+nui-loading[mode="overlay"] .loading-spinner {
+	width: 48px;
+	height: 48px;
+	border: 4px solid var(--color-shade4);
+	border-top-color: var(--color-highlight);
+	border-radius: 50%;
+	animation: loading-spinner-rotate 0.8s linear infinite;
+}
+
+@keyframes loading-spinner-rotate {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+nui-loading[mode="overlay"] .loading-text {
+	color: var(--color-white);
+	font-size: var(--font-size-base);
+	font-weight: 500;
+}
+
+/* Hide when not active */
+nui-loading:not(.active) {
+	display: none !important;
+}
+
+/* =============================================================================
+   BANNER COMPONENT
+   ============================================================================= */
+
+nui-banner {
+	--z-banner: 1000;
+	position: fixed;
+	left: 0;
+	right: 0;
+	z-index: var(--z-banner);
+	display: none;
+	background: var(--color-banner-bg);
+	color: var(--color-banner-text);
+	box-shadow: 0 0 2rem 0 rgba(0, 0, 0, 0.3);
+}
+
+nui-banner[open] {
+	display: block;
+}
+
+/* Banner internal structure */
+nui-banner>.nui-banner-wrapper {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	padding: 1rem;
+	gap: 1rem;
+}
+
+nui-banner>.nui-banner-wrapper>.nui-banner-content {
+	flex: 1;
+	max-height: 50vh;
+	overflow-y: auto;
+}
+
+nui-banner>.nui-banner-wrapper>.nui-banner-close {
+	background: none;
+	border: none;
+	cursor: pointer;
+	font-size: var(--font-size-medium);
+	padding: 0.25rem;
+	flex-shrink: 0;
+	color: inherit;
+	opacity: 0.8;
+}
+
+nui-banner>.nui-banner-wrapper>.nui-banner-close:hover {
+	opacity: 1;
+}
+
+nui-banner[placement="top"] {
+	top: 0;
+	border-top: none;
+	border-left: none;
+	border-right: none;
+}
+
+nui-banner[placement="bottom"],
+nui-banner:not([placement]) {
+	bottom: 0;
+	border-bottom: none;
+	border-left: none;
+	border-right: none;
+}
+
+/* Banner layer inside content - sibling to nui-main */
+nui-content>.nui-banner-layer {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	pointer-events: none;
+	z-index: var(--z-banner, 1000);
+	overflow: hidden;
+}
+
+nui-content>.nui-banner-layer nui-banner {
+	position: absolute;
+	pointer-events: auto;
+}
+
+/* Banner auto-close progress indicator */
+nui-banner>.nui-banner-progress {
+	position: absolute;
+	left: 0;
+	right: 0;
+	height: 0.3rem;
+	background: var(--color-banner-progress);
+	transform-origin: left;
+	animation-timing-function: linear;
+	animation-fill-mode: forwards;
+}
+
+nui-banner[placement="top"]>.nui-banner-progress {
+	bottom: 0;
+}
+
+nui-banner[placement="bottom"]>.nui-banner-progress,
+nui-banner:not([placement])>.nui-banner-progress {
+	top: 0;
+}
+
+@keyframes nui-banner-progress {
+	from {
+		transform: scaleX(1);
+	}
+
+	to {
+		transform: scaleX(0);
+	}
+}
+
+/* =============================================================================
+   WARNING ELEMENT (Simple inline notice)
+   ========================================================================== */
+
+nui-warning {
+	display: block;
+	padding: var(--nui-space);
+	margin: var(--nui-space) 0;
+	border-radius: var(--border-radius2);
+	border-left: 4px solid;
+	background: var(--color-shade1);
+	color: var(--text-color);
+}
+
+nui-warning[level="1"] {
+	border-color: var(--palette-alert);
+	background: light-dark(rgb(255, 240, 240), rgb(60, 30, 30));
+}
+
+nui-warning[level="2"] {
+	border-color: var(--palette-mark);
+	background: light-dark(rgb(255, 250, 230), rgb(60, 55, 30));
+}
+
+nui-warning[level="3"] {
+	border-color: var(--palette-activate);
+	background: light-dark(rgb(240, 255, 240), rgb(30, 60, 30));
+}
+
+/* Banner slide animations */
+.ani-slide-in-top {
+	animation: ani-slide-in-top 0.3s forwards ease-out;
+}
+
+.ani-slide-out-top {
+	animation: ani-slide-out-top 0.3s forwards ease-in;
+}
+
+.ani-slide-in-bottom {
+	animation: ani-slide-in-bottom 0.3s forwards ease-out;
+}
+
+.ani-slide-out-bottom {
+	animation: ani-slide-out-bottom 0.3s forwards ease-in;
+}
+
+@keyframes ani-slide-in-top {
+	from {
+		opacity: 0;
+		transform: translateY(-100%);
+	}
+
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@keyframes ani-slide-out-top {
+	from {
+		opacity: 1;
+		transform: translateY(0);
+	}
+
+	to {
+		opacity: 0;
+		transform: translateY(-100%);
+	}
+}
+
+@keyframes ani-slide-in-bottom {
+	from {
+		opacity: 0;
+		transform: translateY(100%);
+	}
+
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@keyframes ani-slide-out-bottom {
+	from {
+		opacity: 1;
+		transform: translateY(0);
+	}
+
+	to {
+		opacity: 0;
+		transform: translateY(100%);
+	}
+}
+
+/* =============================================================================
+   OVERLAY COMPONENT
+   ============================================================================= */
+
+nui-overlay {
+	display: contents;
+}
+
+nui-overlay dialog {
+	position: fixed;
+	inset: 0;
+	margin: 0;
+	padding: 0;
+	width: 100dvw;
+	height: 100dvh;
+	max-width: 100dvw;
+	max-height: 100dvh;
+	border: none;
+	background: transparent;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	opacity: 1;
+	transition: opacity 0.2s ease-out;
+}
+
+nui-overlay dialog:not([open]) {
+	display: none;
+}
+
+@starting-style {
+	nui-overlay dialog[open] {
+		opacity: 0;
+	}
+}
+
+nui-overlay dialog.closing {
+	opacity: 0;
+}
+
+/* Background */
+nui-overlay dialog::backdrop {
+	background-color: light-dark(rgba(240, 240, 240, 0.95), rgba(20, 20, 20, 0.95));
+	opacity: 1;
+	transition: opacity 0.2s ease-out;
+}
+
+@starting-style {
+	nui-overlay dialog::backdrop {
+		opacity: 0;
+	}
+}
+
+nui-overlay dialog.closing::backdrop {
+	opacity: 0;
+}
+
+/* =============================================================================
+   DROPZONE COMPONENT
+   ============================================================================= */
+
+nui-dropzone {
+	position: absolute;
+	inset: 0;
+	z-index: 100;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 0.2s ease;
+}
+
+nui-dropzone[active] {
+	pointer-events: all;
+	opacity: 1;
+}
+
+nui-dropzone > .nui-dropzone-backdrop {
+	position: absolute;
+	inset: 0;
+	background-color: light-dark(rgba(240, 240, 240, 0.92), rgba(20, 20, 20, 0.92));
+}
+
+nui-dropzone > .nui-dropzone-content {
+	position: absolute;
+	inset: var(--nui-space);
+	display: grid;
+	grid-template-rows: auto;
+	gap: var(--nui-space);
+	z-index: 1;
+}
+
+nui-dropzone > .nui-dropzone-content > [data-drop] {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	background-color: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.06));
+	border: dashed 2px light-dark(var(--color-shade4), var(--color-shade4));
+	border-radius: var(--border-radius2);
+	color: var(--color-text-dim);
+	font-size: var(--font-size-large);
+	transition: all 0.2s ease;
+}
+
+nui-dropzone > .nui-dropzone-content > [data-drop]:hover,
+nui-dropzone > .nui-dropzone-content > [data-drop].active {
+	background-color: light-dark(rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.12));
+	border-color: var(--color-highlight);
+	border-style: solid;
+	color: var(--color-highlight);
+}
+
+/* =============================================================================
+   DIALOG COMPONENT
+   ============================================================================= */
+
+/* Overlay background with fade animation */
+nui-dialog dialog::backdrop {
+	background-color: light-dark(rgba(240, 240, 240, 0.95), rgba(20, 20, 20, 0.95));
+	opacity: 1;
+	transition: opacity 0.2s ease-out;
+}
+
+@starting-style {
+	nui-dialog dialog::backdrop {
+		opacity: 0;
+	}
+}
+
+/* Hide real backdrop during close animation */
+nui-dialog dialog.closing::backdrop {
+	opacity: 0;
+}
+
+/* Fake backdrop for close animation */
+.nui-dialog-backdrop {
+	position: fixed;
+	inset: 0;
+	background-color: light-dark(rgba(240, 240, 240, 0.95), rgba(20, 20, 20, 0.95));
+	z-index: 999;
+	pointer-events: none;
+}
+
+/* Wrapper */
+nui-dialog {
+	display: contents;
+}
+
+/* Base dialog styling */
+nui-dialog dialog {
+	padding: 0;
+	border: none;
+	border-radius: var(--border-radius2);
+	border: solid var(--border-thickness) var(--border-shade1);
+	background: var(--color-shade1);
+	color: var(--text-color);
+	box-shadow: 0 0 2rem 0 rgba(0, 0, 0, 0.2);
+	width: 480px;
+	max-width: 90vw;
+	min-width: 280px;
+	max-height: 80vh;
+}
+
+/* Placement modes: top (1/3), center (default), bottom (2/3) */
+nui-dialog[placement="top"] dialog {
+	margin-block: 0;
+	top: 16.67vh;
+}
+
+/* placement="center" uses browser default (centered) - no override needed */
+
+nui-dialog[placement="bottom"] dialog {
+	margin-block: 0;
+	top: auto;
+	bottom: 16.67vh;
+}
+
+/* Enable the page layout on the dialog */
+nui-dialog[mode="page"] dialog[open],
+nui-dialog[mode="page"] dialog.closing {
+	display: flex;
+}
+
+nui-dialog[mode="page"] dialog {
+	flex-direction: column;
+	width: 90vw;
+	height: 90vh;
+	max-width: var(--space-page-maxwidth, 1200px);
+	max-height: 90vh;
+	padding: 0;
+	border-radius: var(--border-radius3);
+}
+
+/* Header structural styling */
+nui-dialog[mode="page"] dialog > header {
+	flex-shrink: 0;
+	padding: var(--nui-space) var(--nui-space-double);
+	background-color: var(--color-shade2);
+	border-bottom: var(--border-thickness) solid var(--border-shade2);
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+
+nui-dialog[mode="page"] dialog > header h2 {
+	margin: 0;
+	font-weight: 400;
+}
+
+/* Body container - takes up remaining space and scrolls */
+nui-dialog[mode="page"] dialog > main {
+	flex-grow: 1;
+	overflow-y: auto;
+	padding: var(--nui-space-double);
+}
+
+/* Optional: Support for embedded virtual scrollers like nui-list inside page dialogs (no native scroll, no padding) */
+nui-dialog[mode="page"][content-scroll="false"] dialog > main {
+	overflow: hidden;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+/* Footer structural styling */
+nui-dialog[mode="page"] dialog > footer {
+	flex-shrink: 0;
+	padding: var(--nui-space) var(--nui-space-double);
+	border-top: var(--border-thickness) solid var(--border-shade2);
+	background-color: var(--color-shade2);
+}
+
+/* Non-modal dialogs need fixed positioning (modal dialogs use top-layer) */
+nui-dialog dialog:not(:modal) {
+	position: fixed;
+	z-index: calc(var(--z-banner, 1000) + 1);
+}
+
+/* Alert / Confirm Dialog */
+.nui-dialog-alert {
+	position: relative;
+	padding: var(--nui-space-double);
+	width: 100%;
+	border-radius: var(--border-radius2);
+	box-sizing: border-box;
+}
+
+.nui-headline {
+	font-size: var(--font-size-large);
+	font-weight: 200;
+	margin-bottom: var(--nui-space);
+	color: var(--color-highlight);
+}
+
+.nui-copy {
+	display: block;
+	margin-bottom: var(--nui-space-double);
+	line-height: 2;
+	color: var(--text-color);
+}
+
+.nui-dialog-alert nui-button-container,
+.nui-dialog-prompt nui-button-container {
+	margin-top: var(--nui-space);
+}
+
+/* Prompt Dialog */
+.nui-dialog-prompt {
+	padding: var(--nui-space-double);
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.nui-dialog-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--nui-space);
+	margin-bottom: var(--nui-space);
+}
+
+/* Input styling in dialogs */
+.nui-dialog-body .nui-input {
+	display: flex;
+	flex-direction: column;
+	gap: var(--nui-space-quarter);
+	margin-bottom: var(--nui-space);
+}
+
+.nui-dialog-body .nui-input label {
+	color: light-dark(rgba(0, 0, 0, 0.5), rgba(255, 255, 255, 0.5));
+	font-size: var(--font-size-small);
+	text-transform: uppercase;
+}
+
+.nui-dialog-body .nui-input input {
+	min-height: calc(var(--nui-space) * 2.5);
+	padding: var(--nui-space);
+	background: var(--color-base);
+	border: solid var(--border-thickness) var(--color-shade4);
+	border-radius: var(--border-radius1);
+	color: var(--color-text-dim);
+	font-family: var(--system-ui);
+	transition: all 0.2s;
+}
+
+.nui-dialog-body .nui-input input:focus {
+	background: var(--color-shade1);
+	border: solid var(--border-thickness) var(--color-shade6);
+	color: var(--color-text);
+	outline: none;
+}
+
+/* =============================================================================
+   CSS ANIMATIONS
+   ============================================================================= */
+
+/* Fade */
+.ani-fade-in {
+	animation: ani-fade-in 0.2s forwards ease-out;
+}
+
+.ani-fade-out {
+	animation: ani-fade-out 0.2s forwards ease-in;
+}
+
+@keyframes ani-fade-in {
+	from {
+		opacity: 0;
+	}
+
+	to {
+		opacity: 1;
+	}
+}
+
+@keyframes ani-fade-out {
+	from {
+		opacity: 1;
+	}
+
+	to {
+		opacity: 0;
+	}
+}
+
+/* Scale */
+.ani-scale-in {
+	animation: ani-scale-in 0.2s forwards ease-out;
+}
+
+.ani-scale-out {
+	animation: ani-scale-out 0.2s forwards ease-out;
+}
+
+@keyframes ani-scale-in {
+	from {
+		opacity: 0;
+		transform: scale(0.85);
+	}
+
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@keyframes ani-scale-out {
+	from {
+		opacity: 1;
+		transform: scale(1);
+	}
+
+	to {
+		opacity: 0;
+		transform: scale(0.85);
+	}
+}
+
+/* Slide */
+.ani-slide-in {
+	animation: ani-slide-in 0.2s forwards ease-out;
+}
+
+.ani-slide-out {
+	animation: ani-slide-out 0.2s forwards ease-in;
+}
+
+@keyframes ani-slide-in {
+	from {
+		opacity: 0;
+		transform: translateY(1rem);
+	}
+
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@keyframes ani-slide-out {
+	from {
+		opacity: 1;
+		transform: translateY(0);
+	}
+
+	to {
+		opacity: 0;
+		transform: translateY(1rem);
+	}
+}
+
+/* Left/Right */
+.ani-left-in {
+	animation: ani-left-in 0.2s forwards ease-out;
+}
+
+.ani-left-out {
+	animation: ani-left-out 0.2s forwards ease-in;
+}
+
+@keyframes ani-left-in {
+	from {
+		opacity: 0;
+		transform: translateX(-10%);
+	}
+
+	to {
+		opacity: 1;
+		transform: translateX(0);
+	}
+}
+
+@keyframes ani-left-out {
+	from {
+		opacity: 1;
+		transform: translateX(0);
+	}
+
+	to {
+		opacity: 0;
+		transform: translateX(-10%);
+	}
+}
+
+.ani-right-in {
+	animation: ani-right-in 0.2s forwards ease-out;
+}
+
+.ani-right-out {
+	animation: ani-right-out 0.2s forwards ease-in;
+}
+
+@keyframes ani-right-in {
+	from {
+		opacity: 0;
+		transform: translateX(10%);
+	}
+
+	to {
+		opacity: 1;
+		transform: translateX(0);
+	}
+}
+
+@keyframes ani-right-out {
+	from {
+		opacity: 1;
+		transform: translateX(0);
+	}
+
+	to {
+		opacity: 0;
+		transform: translateX(10%);
+	}
+}
+
+/* =============================================================================
+   NUI INPUT COMPONENTS
+   Styling for form input components: nui-input-group, nui-input, nui-textarea,
+   nui-checkbox, nui-radio
+   ============================================================================= */
+
+
+
+/* =============================================================================
+   NUI-INPUT-GROUP - Label Wrapper Component
+   ============================================================================= */
+
+nui-input-group {
+	display: flex;
+	flex-direction: column;
+	gap: var(--nui-space-quarter);
+	margin-bottom: var(--nui-space);
+}
+
+nui-input-group>label {
+	display: block;
+	color: light-dark(rgba(0, 0, 0, 0.5), rgba(255, 255, 255, 0.5));
+	font-size: var(--font-size-xsmall);
+	text-transform: uppercase;
+	letter-spacing: 0.02em;
+	padding: 0;
+	margin: 0;
+}
+
+nui-input-group>.description {
+	font-size: var(--font-size-small);
+	color: var(--color-text-muted);
+	margin-top: calc(var(--nui-space-quarter) * -0.5);
+}
+
+nui-input-group>.nui-error-message {
+	font-size: var(--font-size-small);
+	color: var(--palette-alert);
+}
+
+/* State classes applied by JS */
+nui-input-group.has-error>label {
+	color: var(--palette-alert);
+}
+
+nui-input-group.is-disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+}
+
+/* =============================================================================
+   NUI-FORM-ROW - Horizontal Row with Uniform Height
+   Use for placing inputs, selects, and buttons side by side at matching height.
+   ============================================================================= */
+
+nui-form-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--nui-space);
+	align-items: stretch;
+}
+
+nui-form-row>* {
+	min-height: var(--nui-form-row-height);
+	box-sizing: border-box;
+}
+
+/* Direct children that are form controls get exact height */
+nui-form-row>input,
+nui-form-row>select,
+nui-form-row>button,
+nui-form-row>nui-button>button,
+nui-form-row>nui-input,
+nui-form-row>nui-tag-input,
+nui-form-row>nui-select {
+	height: var(--nui-form-row-height);
+	width: auto;
+}
+
+/* Buttons inside nui-button wrapper */
+nui-form-row>nui-button {
+	display: contents;
+}
+
+/* =============================================================================
+   NUI-INPUT - Text Input Component
+   ============================================================================= */
+
+nui-input {
+	display: flex;
+	align-items: center;
+	position: relative;
+	height: var(--nui-form-row-height);
+	background: light-dark(var(--color-white), rgb(45, 45, 45));
+	border: solid var(--border-thickness) var(--color-shade3);
+	box-sizing: border-box;
+	filter: drop-shadow(0 0 0.15rem light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.2)));
+	transition: background-color 0.15s, border-color 0.15s, filter 0.3s;
+	border-radius: var(--border-radius1);
+}
+
+nui-input:hover:not(:has(input:disabled)) {
+	border-color: var(--color-shade5);
+}
+
+nui-input:has(input:focus) {
+	border-color: var(--color-shade5);
+	filter: drop-shadow(0 0 0.3rem light-dark(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.2)));
+	background-color: light-dark(var(--color-white), var(--color-shade3));
+}
+
+nui-input:has(input:disabled) {
+	background: var(--color-shade2);
+	cursor: not-allowed;
+}
+
+nui-input:has(input:read-only) {
+	background: var(--color-shade2);
+}
+
+nui-input input[type] {
+	flex: 1;
+	width: 100%;
+	height: 100%;
+	padding: 0 var(--nui-space-half);
+	background: transparent;
+	border: none;
+	color: var(--color-text);
+	font-family: var(--system-ui);
+	font-size: inherit;
+	line-height: 2;
+	outline: none;
+	box-sizing: border-box;
+	margin: 0;
+	padding-bottom: 0.08rem;
+}
+
+/* Hide native search clear button */
+nui-input input[type="search"]::-webkit-search-cancel-button {
+	display: none;
+}
+
+nui-input input[type]:focus,
+nui-input input[type]:hover,
+nui-input input[type]:focus-visible {
+	outline: none;
+	border: none;
+	background-color: transparent;
+}
+
+nui-input input::placeholder {
+	color: var(--color-shade5);
+}
+
+nui-input input:disabled {
+	color: var(--color-shade4);
+	cursor: not-allowed;
+}
+
+/* Validation states */
+nui-input.is-valid::after {
+	content: '';
+	position: absolute;
+	width: 2rem;
+	height: 100%;
+	right: 0;
+	top: 0;
+	background-color: var(--palette-activate);
+	-webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'%3E%3C/polyline%3E%3C/svg%3E");
+	mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'%3E%3C/polyline%3E%3C/svg%3E");
+	-webkit-mask-repeat: no-repeat;
+	mask-repeat: no-repeat;
+	-webkit-mask-position: center;
+	mask-position: center;
+	-webkit-mask-size: 40%;
+	mask-size: 40%;
+}
+
+/* Clear button */
+nui-input .nui-clear-btn {
+	position: absolute;
+	right: var(--nui-space-half);
+	top: 50%;
+	transform: translateY(-50%);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.5rem;
+	height: 1.5rem;
+	padding: 0;
+	background: transparent;
+	border: none;
+	border-radius: var(--border-radius1);
+	cursor: pointer;
+	color: var(--color-shade5);
+	transition: color 0.15s, background-color 0.15s;
+}
+
+nui-input .nui-clear-btn:hover {
+	color: var(--color-text-dim);
+	background: var(--color-shade2);
+}
+
+nui-input .nui-clear-btn nui-icon {
+	width: 1rem;
+	height: 1rem;
+}
+
+/* Input icon button (search prefix, etc.) */
+nui-input .nui-input-icon {
+	position: absolute;
+	top: 50%;
+	transform: translateY(-50%);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.5rem;
+	height: 1.5rem;
+	padding: 0;
+	background: transparent;
+	border: none;
+	border-radius: var(--border-radius1);
+	cursor: pointer;
+	color: var(--color-shade5);
+	transition: color 0.15s, background-color 0.15s;
+	flex-shrink: 0;
+}
+
+nui-input .nui-input-icon-start {
+	left: var(--nui-space-half);
+}
+
+nui-input .nui-input-icon-end {
+	right: var(--nui-space-half);
+}
+
+nui-input .nui-input-icon:hover {
+	color: var(--color-text-dim);
+	background: var(--color-shade2);
+}
+
+nui-input .nui-input-icon nui-icon {
+	width: 1rem;
+	height: 1rem;
+}
+
+/* Input padding when icons present */
+nui-input:has(.nui-input-icon-start) input {
+	padding-left: calc(var(--nui-space-half) + 1.5rem + var(--nui-space-half));
+}
+
+nui-input:has(.nui-input-icon-end) input {
+	padding-right: calc(var(--nui-space-half) + 1.5rem + var(--nui-space-half));
+}
+
+/* When clearable, add padding for the button */
+nui-input[clearable] input {
+	padding-right: calc(var(--nui-space) + 2rem);
+}
+
+/* Error indicator - alert icon inside input */
+nui-input .nui-error-indicator {
+	position: absolute;
+	right: var(--nui-space-quarter);
+	top: 50%;
+	transform: translateY(-50%);
+	color: var(--palette-alert);
+	cursor: help;
+	outline: none;
+	display: none;
+}
+
+nui-input.is-invalid .nui-error-indicator {
+	display: inline-flex;
+}
+
+nui-input.is-invalid input {
+	padding-right: calc(var(--nui-space) + var(--icon-size));
+}
+
+/* =============================================================================
+   NUI-SELECT - Enhanced Select Component
+   ============================================================================= */
+
+nui-select {
+	display: block;
+	position: relative;
+	width: 100%;
+	min-width: 10rem;
+	height: var(--nui-form-row-height);
+	box-sizing: border-box;
+}
+
+nui-select select {
+	position: absolute;
+	opacity: 0;
+	pointer-events: none;
+	width: 1px;
+	height: 1px;
+}
+
+.nui-select-control {
+	position: relative;
+	display: flex;
+	align-items: center;
+	width: 100%;
+	height: var(--nui-form-row-height);
+	padding: 0 var(--nui-space);
+	background: light-dark(var(--color-white), var(--color-shade3));
+	border: solid var(--border-thickness) var(--color-shade4);
+
+	border-radius: var(--border-radius2);
+	filter: drop-shadow(0 0.05rem 0.2rem light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.4)));
+	color: var(--color-text);
+	font-family: var(--system-ui);
+	font-size: var(--font-size-base);
+	text-align: left;
+	cursor: pointer;
+	transition: background-color 0.15s, border-color 0.15s;
+	box-sizing: border-box;
+	overflow: hidden;
+}
+
+.nui-select-control:hover:not(:disabled) {
+	background-color: light-dark(var(--color-shade2), var(--color-shade4));
+	border: solid var(--border-thickness) light-dark(var(--color-shade5), var(--color-shade5));
+}
+
+.nui-select-control:focus-visible {
+	outline: 2px solid var(--color-highlight);
+	outline-offset: 2px;
+}
+
+nui-select.is-open .nui-select-control {
+	background-color: var(--color-shade3);
+	border-radius: var(--border-radius2) var(--border-radius2) 0 0;
+	filter: drop-shadow(0 0 0.5rem light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.4)));
+	z-index: 1001;
+	border: solid var(--border-thickness) light-dark(var(--color-shade5), var(--color-shade4));
+	border-bottom: solid var(--border-thickness) light-dark(var(--color-shade4), var(--color-shade3));
+}
+
+nui-select.is-above.is-open .nui-select-control {
+	border-radius: 0 0 var(--border-radius2) var(--border-radius2);
+	border-bottom: solid var(--border-thickness) light-dark(var(--color-shade5), var(--color-shade4));
+	border-top: solid var(--border-thickness) light-dark(var(--color-shade4), var(--color-shade3));
+}
+
+
+nui-select.is-open .nui-select-control:hover {
+	border: solid var(--border-thickness) light-dark(var(--color-shade5), var(--color-shade4));
+	border-bottom: solid var(--border-thickness) light-dark(var(--color-shade4), var(--color-shade3));
+}
+
+nui-select.is-above.is-open .nui-select-control:hover {
+	border-bottom: solid var(--border-thickness) light-dark(var(--color-shade5), var(--color-shade4));
+	border-top: solid var(--border-thickness) light-dark(var(--color-shade4), var(--color-shade3));
+}
+
+nui-select.is-disabled .nui-select-control {
+	background-color: var(--color-shade2);
+	cursor: not-allowed;
+	opacity: 0.6;
+}
+
+nui-select.is-loading .nui-select-value {
+	font-style: italic;
+	opacity: 0.7;
+}
+
+/* Value Display */
+.nui-select-value {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	height: 100%;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	line-height: 2;
+}
+
+.nui-select-value.is-placeholder {
+	color: var(--color-shade5);
+}
+
+/* Multi-select Preview */
+.nui-select-preview {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	overflow: hidden;
+	position: relative;
+	height: 100%;
+	opacity: 0.7;
+}
+
+.is-open .nui-select-preview,
+.is-open .nui-select-count {
+	display: none;
+}
+
+.nui-select-preview-tags {
+	display: flex;
+	gap: var(--nui-space-quarter);
+	white-space: nowrap;
+	height: 100%;
+	box-sizing: border-box;
+	padding-top: 0.2rem;
+	padding-bottom: 0.2rem;
+}
+
+.nui-select-preview-tags .nui-tag {
+	height: auto;
+	font-size: var(--font-size-xsmall);
+	padding: 0.7rem;
+	background: var(--color-shade2);
+	border-radius: var(--border-radius1);
+	color: var(--color-text);
+}
+
+.nui-select-preview-fade {
+	position: absolute;
+	right: 0;
+	top: 0;
+	bottom: 0;
+	width: 2rem;
+	/*background: linear-gradient(to right, transparent, light-dark(var(--color-white), var(--color-shade3)));*/
+	pointer-events: none;
+}
+
+
+
+.nui-select-count {
+	font-size: var(--font-size-small);
+	font-weight: bold;
+	color: var(--color-highlight);
+	margin: 0 var(--nui-space-half);
+}
+
+.nui-select-arrow {
+	width: 1.2rem;
+	height: 1.2rem;
+	margin-left: auto;
+	background-color: var(--color-shade5);
+	-webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+	mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+	-webkit-mask-repeat: no-repeat;
+	mask-repeat: no-repeat;
+	-webkit-mask-position: center;
+	mask-position: center;
+	transition: transform 0.2s;
+}
+
+nui-select.is-open .nui-select-arrow {
+	transform: rotate(180deg);
+}
+
+/* Popup */
+.nui-select-popup {
+	display: none;
+	position: absolute;
+	z-index: 1000;
+	top: calc(var(--nui-form-row-height) - 2px);
+	left: 0;
+	right: 0;
+	min-width: 10rem;
+	background: light-dark(var(--color-white), var(--color-shade2));
+	border: solid var(--border-thickness) var(--color-shade3);
+	border-radius: 0 0 var(--border-radius2) var(--border-radius2);
+	box-shadow: var(--shadow-large);
+	margin-top: 2px;
+	flex-direction: column;
+	max-height: 400px;
+	overflow: hidden;
+	filter: drop-shadow(0 0 0.5rem light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.4)));
+}
+
+nui-select.is-open {
+	z-index: 1001;
+}
+
+nui-select.is-open .nui-select-popup {
+	display: flex;
+	border: solid var(--border-thickness) light-dark(var(--color-shade5), var(--color-shade4));
+}
+
+nui-select.is-above .nui-select-popup {
+	top: auto;
+	bottom: 100%;
+	margin-top: 0;
+	margin-bottom: 2px;
+	border-radius: var(--border-radius2) var(--border-radius2) 0 0;
+	flex-direction: column-reverse;
+}
+
+/* Mobile: reverse order so options are at top, keyboard doesn't cover them */
+@media (max-width: 768px) {
+	.nui-select-popup {
+		flex-direction: column-reverse;
+	}
+}
+
+/* Search */
+.nui-select-search {
+	border-bottom: solid var(--border-thickness) var(--color-shade3);
+	background: light-dark(var(--color-white), rgb(55, 55, 55));
+}
+
+/* When reversed, search should have top border instead of bottom */
+nui-select.is-above .nui-select-search {
+	border-bottom: none;
+	border-top: solid var(--border-thickness) var(--color-shade3);
+}
+
+@media (max-width: 430px) {
+	.nui-select-search {
+		border-bottom: none;
+		border-top: solid var(--border-thickness) var(--color-shade3);
+	}
+}
+
+.nui-select-popup .nui-select-search input {
+	background-color: transparent;
+}
+
+.nui-select-search nui-input:has(input:focus-visible),
+.nui-select-search nui-input:has(input:focus) {
+	background: transparent;
+	border-color: transparent;
+	box-shadow: none;
+}
+
+.nui-select-search input:focus-visible,
+.nui-select-search input:focus {
+	outline: none;
+	box-shadow: none;
+}
+
+/* Popup Tags (Multi-select) */
+.nui-select-popup-tags * {
+	box-sizing: border-box;
+}
+
+.nui-select-popup-tags {
+	border-bottom: solid var(--border-thickness) var(--color-shade4);
+	background-color: var(--color-shade3);
+	max-height: 160px;
+	height: auto;
+	overflow-y: hidden;
+	overflow-x: hidden;
+	padding: 0.4rem;
+}
+
+.nui-select-popup-tags nui-tag-input {
+	margin: 0;
+	padding: 0;
+	height: 100%;
+}
+
+/* When reversed, tags should have top border instead of bottom */
+nui-select.is-above .nui-select-popup-tags {
+	border-bottom: none;
+	border-top: solid var(--border-thickness) var(--color-shade4);
+}
+
+@media (max-width: 768px) {
+	.nui-select-popup-tags {
+		border-bottom: none;
+		border-top: solid var(--border-thickness) var(--color-shade4);
+	}
+}
+
+
+/* Options List */
+.nui-select-options {
+	flex: 1;
+	overflow-y: auto;
+}
+
+.nui-select-option {
+	display: flex;
+	align-items: center;
+	padding: var(--nui-space-half) var(--nui-space);
+	cursor: pointer;
+	transition: background-color 0.1s;
+	color: var(--color-text-dim);
+}
+
+.nui-select-option:hover:not(.is-disabled) {
+	background: var(--color-shade4);
+	color: var(--color-text);
+}
+
+.nui-select-option.is-selected {
+	background: light-dark(var(--color-highlight-dim), rgb(50, 50, 50));
+	color: var(--color-white);
+}
+
+.nui-select-option.is-focused {
+	outline: 2px solid var(--color-highlight);
+	outline-offset: -2px;
+}
+
+.nui-select-option.is-disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.nui-select-option-check {
+	width: 1.2rem;
+	height: 1.2rem;
+	margin-right: var(--nui-space-half);
+	flex-shrink: 0;
+}
+
+.nui-select-option.is-selected .nui-select-option-check {
+	background-color: currentColor;
+	-webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'%3E%3C/polyline%3E%3C/svg%3E");
+	mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'%3E%3C/polyline%3E%3C/svg%3E");
+	-webkit-mask-repeat: no-repeat;
+	mask-repeat: no-repeat;
+	-webkit-mask-position: center;
+	mask-position: center;
+	-webkit-mask-size: 100%;
+	mask-size: 100%;
+}
+
+.nui-select-option-text {
+	flex: 1;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Groups */
+.nui-select-group-label {
+	padding: var(--nui-space-half) var(--nui-space);
+	font-size: var(--font-size-xsmall);
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--color-shade5);
+	font-weight: bold;
+	background: var(--color-shade1);
+	pointer-events: none;
+	user-select: none;
+}
+
+.nui-select-no-results {
+	padding: var(--nui-space-double);
+	text-align: center;
+	color: var(--color-shade5);
+	font-style: italic;
+}
+
+/* Validation */
+nui-select.is-invalid .nui-select-control {
+	border-bottom-color: var(--palette-alert);
+}
+
+/* =============================================================================
+   NUI-TEXTAREA - Multiline Text Component
+   ============================================================================= */
+
+nui-textarea {
+	display: block;
+	position: relative;
+}
+
+nui-textarea textarea {
+	display: block;
+	width: 100%;
+	min-height: calc(calc(var(--nui-space) * 2.5) * 2);
+	padding: var(--nui-space);
+	color: var(--color-text-dim);
+	font-family: inherit;
+	margin: 0;
+	resize: vertical;
+	background: light-dark(var(--color-white), rgb(45, 45, 45));
+	border: solid var(--border-thickness) var(--color-shade3);
+	box-sizing: border-box;
+	filter: drop-shadow(0 0 0.15rem light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.2)));
+	transition: background-color 0.15s, border-color 0.15s, filter 0.3s;
+	border-radius: var(--border-radius1);
+}
+
+nui-textarea textarea::placeholder {
+	color: var(--color-shade5);
+}
+
+nui-textarea textarea:hover:not(:disabled) {
+	background: var(--color-shade1);
+	border-color: var(--color-shade5);
+}
+
+nui-textarea textarea:focus {
+	background: var(--color-shade1);
+	border-color: var(--color-shade6);
+	color: var(--color-text);
+}
+
+nui-textarea textarea:disabled {
+	background: var(--color-shade2);
+	color: var(--color-shade4);
+	cursor: not-allowed;
+}
+
+/* Auto-resize mode */
+nui-textarea[auto-resize] textarea {
+	resize: none;
+	overflow: hidden;
+}
+
+/* Character count */
+nui-textarea .nui-char-count {
+	font-size: var(--font-size-xsmall);
+	color: var(--color-text-muted);
+	text-align: right;
+	margin-top: var(--nui-space-quarter);
+}
+
+nui-textarea .nui-char-count.at-limit {
+	color: var(--palette-alert);
+}
+
+/* Validation states */
+nui-textarea.is-invalid textarea {
+	border-color: var(--palette-alert);
+}
+
+nui-textarea.is-valid textarea {
+	border-color: var(--palette-activate);
+}
+
+/* Error message */
+nui-textarea .nui-error-message {
+	display: none;
+	font-size: var(--font-size-small);
+	color: var(--palette-alert);
+	margin-top: var(--nui-space-quarter);
+}
+
+nui-textarea.is-invalid .nui-error-message {
+	display: block;
+}
+
+/* =============================================================================
+   NUI-CHECKBOX - Custom Checkbox Component
+   ============================================================================= */
+
+nui-checkbox {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--nui-space-half);
+	cursor: pointer;
+	position: relative;
+	min-height: 2rem;
+	margin-right: var(--nui-space);
+}
+
+/* Hide native checkbox visually but keep accessible */
+nui-checkbox input[type="checkbox"] {
+	position: absolute;
+	opacity: 0;
+	width: 0;
+	height: 0;
+	pointer-events: none;
+}
+
+/* Custom checkbox visual */
+nui-checkbox .nui-check-box {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.25rem;
+	height: 1.25rem;
+	border: 2px solid var(--color-shade4);
+	border-radius: 3px;
+	background: var(--color-base);
+	flex-shrink: 0;
+	transition: background-color 0.15s, border-color 0.15s;
+}
+
+/* Checkmark icon */
+nui-checkbox .nui-check-box svg {
+	width: 0.875rem;
+	height: 0.875rem;
+	fill: none;
+	stroke: white;
+	stroke-width: 3;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	opacity: 0;
+	transform: scale(0);
+	transition: opacity 0.1s, transform 0.1s;
+}
+
+/* Hover state */
+nui-checkbox:hover .nui-check-box {
+	border-color: var(--color-highlight);
+}
+
+/* Checked state */
+nui-checkbox input:checked~.nui-check-box {
+	background: var(--color-highlight);
+	border-color: var(--color-highlight);
+}
+
+nui-checkbox input:checked~.nui-check-box svg {
+	opacity: 1;
+	transform: scale(1);
+}
+
+/* Focus state - on custom visual */
+nui-checkbox input:focus-visible~.nui-check-box {
+	outline: 2px solid var(--color-highlight);
+	outline-offset: 2px;
+}
+
+/* Disabled state */
+nui-checkbox:has(input:disabled) {
+	cursor: not-allowed;
+	opacity: 0.6;
+}
+
+nui-checkbox input:disabled~.nui-check-box {
+	background: var(--color-shade2);
+	border-color: var(--color-shade4);
+}
+
+/* Indeterminate state */
+nui-checkbox input:indeterminate~.nui-check-box {
+	background: var(--color-highlight);
+	border-color: var(--color-highlight);
+}
+
+nui-checkbox input:indeterminate~.nui-check-box svg {
+	opacity: 0;
+}
+
+nui-checkbox input:indeterminate~.nui-check-box::after {
+	content: '';
+	width: 0.5rem;
+	height: 2px;
+	background: white;
+	border-radius: 1px;
+}
+
+/* Label styling */
+nui-checkbox label {
+	color: var(--color-text-dim);
+	cursor: inherit;
+	user-select: none;
+}
+
+/*
+============================================================================= 
+   NUI-CHECKBOX (SWITCH VARIANT)
+============================================================================= 
+*/
+
+nui-checkbox[variant="switch"] .nui-check-box {
+	box-sizing: border-box;
+	width: 2.25em;
+	height: 1.25em;
+	padding: 0.1875em;
+	border-radius: 1em;
+	background: var(--color-shade4);
+	border: none;
+	transition: background-color 0.2s;
+	justify-content: flex-start;
+}
+
+nui-checkbox[variant="switch"] .nui-check-box svg {
+	display: none; /* Hide the checkmark */
+}
+
+/* The switch thumb */
+nui-checkbox[variant="switch"] .nui-check-box::before {
+	content: '';
+	display: block;
+	height: 100%;
+	aspect-ratio: 1 / 1;
+	background: white;
+	border-radius: 50%;
+	transition: transform 0.2s;
+	box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+nui-checkbox[variant="switch"]:hover .nui-check-box {
+	background: var(--color-shade5);
+}
+
+nui-checkbox[variant="switch"] input:checked ~ .nui-check-box {
+	background: var(--color-highlight);
+}
+
+nui-checkbox[variant="switch"] input:checked ~ .nui-check-box::before {
+	transform: translateX(1em); /* Exactly container width (2.25em) - container height (1.25em) */
+}
+
+nui-checkbox[variant="switch"] input:focus-visible ~ .nui-check-box {
+	outline: 2px solid var(--color-highlight);
+	outline-offset: 2px;
+}
+
+nui-checkbox[variant="switch"] input:disabled ~ .nui-check-box {
+	background: var(--color-shade4);
+	opacity: 1; /* prevent double opacity stacking with parent disabled state */
+}
+
+nui-checkbox[variant="switch"] input:disabled ~ .nui-check-box::before {
+	background: var(--color-shade1);
+	box-shadow: none;
+}
+
+/* =============================================================================
+   NUI-RADIO - Custom Radio Button Component
+   ============================================================================= */
+
+nui-radio {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--nui-space-half);
+	cursor: pointer;
+	position: relative;
+	min-height: 2rem;
+	margin-right: var(--nui-space);
+}
+
+/* Hide native radio visually but keep accessible */
+nui-radio input[type="radio"] {
+	position: absolute;
+	opacity: 0;
+	width: 0;
+	height: 0;
+	pointer-events: none;
+}
+
+/* Custom radio visual */
+nui-radio .nui-radio-circle {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.25rem;
+	height: 1.25rem;
+	border: 2px solid var(--color-shade4);
+	border-radius: 50%;
+	background: var(--color-base);
+	flex-shrink: 0;
+	transition: border-color 0.15s;
+}
+
+/* Inner dot */
+nui-radio .nui-radio-circle::after {
+	content: '';
+	width: 0.5rem;
+	height: 0.5rem;
+	border-radius: 50%;
+	background: var(--color-highlight);
+	transform: scale(0);
+	transition: transform 0.15s ease;
+}
+
+/* Hover state */
+nui-radio:hover .nui-radio-circle {
+	border-color: var(--color-highlight);
+}
+
+/* Checked state */
+nui-radio input:checked~.nui-radio-circle {
+	border-color: var(--color-highlight);
+}
+
+nui-radio input:checked~.nui-radio-circle::after {
+	transform: scale(1);
+}
+
+/* Focus state - on custom visual */
+nui-radio input:focus-visible~.nui-radio-circle {
+	outline: 2px solid var(--color-highlight);
+	outline-offset: 2px;
+}
+
+/* Disabled state */
+nui-radio:has(input:disabled) {
+	cursor: not-allowed;
+	opacity: 0.6;
+}
+
+nui-radio input:disabled~.nui-radio-circle {
+	background: var(--color-shade2);
+	border-color: var(--color-shade4);
+}
+
+/* Label styling */
+nui-radio label {
+	color: var(--color-text-dim);
+	cursor: inherit;
+	user-select: none;
+}
+
+/* =============================================================================
+   ACCESSIBILITY - Reduced Motion
+   ============================================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+
+	nui-input input,
+	nui-textarea textarea,
+	nui-checkbox .nui-check-box,
+	nui-checkbox .nui-check-box svg,
+	nui-radio .nui-radio-circle,
+	nui-radio .nui-radio-circle::after {
+		transition: none;
+	}
+}
+
+/* =============================================================================
+   AUTOFILL STYLING
+   ============================================================================= */
+
+nui-input input:-webkit-autofill,
+nui-textarea textarea:-webkit-autofill,
+nui-input input:-webkit-autofill:hover,
+nui-input input:-webkit-autofill:focus,
+nui-textarea textarea:-webkit-autofill:hover,
+nui-textarea textarea:-webkit-autofill:focus {
+	border: none;
+	-webkit-text-fill-color: var(--color-text);
+	transition: background-color 5000s ease-in-out 0s;
+	background-color: transparent !important;
+}
+
+
+/* =============================================================================
+   NUI-TAG-INPUT COMPONENT
+   ============================================================================= */
+
+nui-tag-input {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	min-height: 2rem;
+	gap: var(--nui-space-quarter);
+	padding: var(--nui-space-half);
+	background: var(--color-shade3);
+	border: 1px solid var(--color-shade3);
+	border-radius: var(--border-radius1);
+}
+
+nui-tag-input:focus-within {
+	border-color: var(--color-accent);
+	outline: 2px solid var(--color-focus-ring);
+	outline-offset: 1px;
+}
+
+/* Tags container */
+.nui-tag-input-tags {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--nui-space-half);
+	border-radius: var(--border-radius1);
+}
+
+
+/* Individual tag */
+.nui-tag {
+	display: flex;
+	height: 100%;
+	align-items: center;
+	background: var(--color-shade2);
+	border: solid var(--border-thickness) var(--border-shade3);
+	border-radius: var(--border-radius2);
+	padding-left: 0.8rem;
+	padding-top: 0.2rem;
+	padding-bottom: 0.2rem;
+	font-size: var(--font-size-small);
+	color: var(--color-text);
+	filter: drop-shadow(0.05rem 0.05rem 0.15rem light-dark(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.3)));
+	user-select: none;
+}
+
+
+.nui-tag-text {
+	max-width: 12rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-transform: capitalize;
+}
+
+/* Tag remove button */
+.nui-tag-remove {
+	background-color: transparent;
+	border: none;
+	color: var(--color-text-muted);
+	cursor: pointer;
+	transition: color 0.1s;
+	padding: 0;
+	width: 2.5rem;
+	min-height: none;
+	height: 100%;
+	opacity: 0.6;
+	transition: opacity 0.2s;
+}
+
+
+
+.nui-tag-remove:hover {
+	background-color: transparent;
+	opacity: 1;
+}
+
+
+/* Text input for adding tags (editable mode) */
+.nui-tag-input-field {
+	flex: 1 1 8rem;
+	min-width: 4rem;
+	padding: 0.25rem;
+	background: transparent;
+	border: none;
+	outline: none;
+	font: inherit;
+	color: var(--color-text);
+}
+
+.nui-tag-input-field::placeholder {
+	color: var(--color-text-muted);
+}
+
+/* State classes */
+nui-tag-input.is-empty .nui-tag-input-tags {
+	display: none;
+}
+
+/* Read-only tags (used in select preview) */
+.nui-tag--readonly {
+	cursor: default;
+}
+
+.nui-tag--readonly .nui-tag-remove {
+	display: none;
+}
+
+/* Inside input-group */
+nui-input-group nui-tag-input {
+	width: 100%;
+}
+
+
+/* =============================================================================
+   NUI-TABS COMPONENT
+   ============================================================================= */
+
+nui-tabs {
+	display: flow-root;
+	width: 100%;
+}
+
+/* Tab List Container */
+nui-tabs [role="tablist"] {
+	display: flex;
+	flex-wrap: wrap;
+	border-bottom: solid var(--border-thickness) var(--border-shade2);
+	margin-bottom: var(--nui-space);
+	gap: var(--nui-space-quarter);
+}
+
+/* Tab Items (Buttons/Links) */
+nui-tabs [role="tab"] {
+	appearance: none;
+	background: transparent;
+	border: none;
+	border-bottom: 2px solid transparent;
+	color: var(--color-text-dim);
+	cursor: pointer;
+	font-family: var(--system-ui);
+	font-size: var(--font-size-base);
+	padding: var(--nui-space-half) var(--nui-space);
+	transition: all 0.2s ease;
+	text-decoration: none;
+	display: inline-flex;
+	align-items: center;
+	gap: var(--nui-space-half);
+}
+
+nui-tabs [role="tab"]:hover {
+	color: var(--color-text);
+	background-color: var(--color-shade2);
+	border-radius: var(--border-radius1) var(--border-radius1) 0 0;
+}
+
+nui-tabs [role="tab"][aria-selected="true"] {
+	color: var(--color-highlight);
+	border-bottom-color: var(--color-highlight);
+}
+
+nui-tabs [role="tab"]:focus-visible {
+	outline: 2px solid var(--color-highlight);
+	outline-offset: -2px;
+	border-radius: var(--border-radius1);
+}
+
+/* Tab Panels */
+nui-tabs [role="tabpanel"] {
+	display: block;
+	animation: ani-fade-in 0.2s ease-out;
+}
+
+nui-tabs [role="tabpanel"][hidden] {
+	display: none !important;
+}
+
+/* Fill mode - panels fill available height */
+nui-tabs[fill] {
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 auto;
+	min-height: 0;
+	height: 100%;
+}
+
+nui-tabs[fill] [role="tablist"] {
+	flex-shrink: 0;
+}
+
+nui-tabs[fill] [role="tabpanel"] {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+}
+
+nui-tabs[fill] [role="tabpanel"][hidden] {
+	display: none;
+}
+
+/* Rich text inside fill mode tabs expands to fill panel */
+nui-tabs[fill] [role="tabpanel"] nui-rich-text {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+}
+
+nui-tabs[fill] [role="tabpanel"] nui-rich-text .nui-rich-text-container {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	overflow: hidden; /* Prevent border from causing scrollbars */
+	box-sizing: border-box; /* Include border in width calculation */
+}
+
+nui-tabs[fill] [role="tabpanel"] nui-rich-text .nui-rich-text-editor {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	height: 100%;
+}
+
+/* =============================================================================
+   NUI-ACCORDION COMPONENT
+   ============================================================================= */
+
+nui-accordion {
+	display: block;
+	width: 100%;
+	border: solid var(--border-thickness) var(--border-shade2);
+	border-radius: var(--border-radius2);
+	overflow: hidden;
+}
+
+nui-accordion details {
+	border-bottom: solid var(--border-thickness) var(--border-shade2);
+	background: var(--color-shade2);
+}
+
+nui-accordion details:last-child {
+	border-bottom: none;
+}
+
+nui-accordion summary {
+	padding: var(--nui-space);
+	cursor: pointer;
+	font-weight: 500;
+	list-style: none;
+	position: relative;
+	padding-right: var(--nui-space-triple);
+	transition: background-color 0.2s ease-in-out;
+}
+
+nui-accordion summary:hover {
+	background-color: var(--color-shade2);
+}
+
+nui-accordion summary:focus-visible {
+	outline: 2px solid var(--color-highlight);
+	outline-offset: -2px;
+	z-index: 1;
+}
+
+/* Custom arrow indicator */
+nui-accordion summary::-webkit-details-marker {
+	display: none;
+}
+
+nui-accordion summary::after {
+	content: '';
+	position: absolute;
+	right: var(--nui-space);
+	top: 50%;
+	width: 0.6em;
+	height: 0.6em;
+	border-right: 2px solid var(--color-text-dim);
+	border-bottom: 2px solid var(--color-text-dim);
+	transform: translateY(-60%) rotate(45deg);
+	transition: transform 0.2s ease;
+}
+
+nui-accordion details[open] summary::after {
+	transform: translateY(-30%) rotate(225deg);
+	border-color: var(--color-highlight);
+}
+
+nui-accordion details[open] summary {
+	color: var(--color-highlight);
+	border-bottom: solid var(--border-thickness) var(--border-shade2);
+}
+
+nui-accordion .accordion-content {
+	padding: var(--nui-space);
+	background: var(--color-base);
+	line-height: 1.6;
+}
+
+/* Clean Variant */
+nui-accordion.nui-accordion-clean {
+	border: none;
+	border-radius: 0;
+}
+
+nui-accordion.nui-accordion-clean details {
+	border-bottom: solid var(--border-thickness) var(--border-shade2);
+	background: transparent;
+}
+
+nui-accordion.nui-accordion-clean summary {
+	padding-left: 0;
+}
+
+nui-accordion.nui-accordion-clean .accordion-content {
+	padding-left: 0;
+	padding-right: 0;
+	background: transparent;
+}
+
+
+/* =============================================================================
+   NUI-DETAILS COMPONENT
+   ============================================================================= */
+
+nui-details {
+	position: relative;
+	display: block;
+	margin: var(--nui-space) 0;
+}
+
+nui-details details summary {
+	cursor: pointer;
+	font-weight: bold;
+	padding: var(--nui-space-half) var(--nui-space);
+	background: var(--color-shade2);
+	border-radius: var(--border-radius2);
+}
+
+nui-details details summary::marker {
+	font-size: 1rem;
+	color: var(--color-text-dim);
+}
+
+nui-details details summary strong {
+	font-weight: 400;
+	margin-left: 0.2rem;
+}
+
+nui-details-content {
+	padding: var(--nui-space);
+	background: var(--color-shade1);
+	border-radius: 0 0 var(--border-radius1) var(--border-radius1);
+}
+
+nui-details details pre {
+	margin: 0;
+	overflow-x: auto;
+	font-size: 0.875rem;
+}
+
+
+
+
+/* =============================================================================
+   ROUTER TRANSITIONS
+   ============================================================================= */
+
+[class^='content-'] {
+	opacity: 0;
+	transform: translateY(-1rem);
+	transition: opacity 0.3s ease-out, transform 0.2s ease-out;
+}
+
+[class^='content-'].nui-page-active {
+	opacity: 1;
+	transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	[class^='content-'] {
+		transition: none !important;
+		transform: none !important;
+		opacity: 1 !important;
+	}
+}
+
+
+/* =============================================================================
+   DIALOG & BANNER ANIMATIONS
+   ============================================================================= */
+
+nui-dialog dialog {
+	transition: opacity 0.2s, transform 0.2s, display 0.2s allow-discrete, overlay 0.2s allow-discrete;
+	opacity: 0;
+	transform: scale(0.95);
+}
+
+nui-dialog dialog[open] {
+	opacity: 1;
+	transform: scale(1);
+}
+
+nui-dialog dialog.closing {
+	opacity: 0;
+	transform: scale(0.95);
+}
+
+@starting-style {
+	nui-dialog dialog[open] {
+		opacity: 0;
+		transform: scale(0.95);
+	}
+}
+
+nui-dialog dialog::backdrop {
+	transition: opacity 0.2s, display 0.2s allow-discrete, overlay 0.2s allow-discrete;
+	opacity: 0;
+	background-color: light-dark(rgba(240, 240, 240, 0.95), rgba(20, 20, 20, 0.95));
+}
+
+nui-dialog dialog[open]::backdrop {
+	opacity: 1;
+}
+
+nui-dialog dialog.closing::backdrop {
+	opacity: 0;
+}
+
+@starting-style {
+	nui-dialog dialog[open]::backdrop {
+		opacity: 0;
+	}
+}
+
+/* Banner Base Styles */
+nui-banner {
+	transition: opacity 0.3s, transform 0.3s, display 0.3s allow-discrete;
+	opacity: 0;
+	transform: translateY(100%);
+}
+
+nui-banner[placement='top'] {
+	transform: translateY(-100%);
+}
+
+/* Banner Open State (Overrides Base) */
+nui-banner[open] {
+	opacity: 1;
+	transform: translateY(0);
+}
+
+/* Banner Closing State */
+nui-banner.closing {
+	opacity: 0;
+	transform: translateY(100%);
+}
+
+nui-banner[placement='top'].closing {
+	transform: translateY(-100%);
+}
+
+/* Banner Starting Styles */
+@starting-style {
+	nui-banner[open] {
+		opacity: 0;
+		transform: translateY(100%);
+	}
+
+	nui-banner[placement='top'][open] {
+		transform: translateY(-100%);
+	}
+}
+
+/* ################################# nui-slider COMPONENT */
+
+nui-slider {
+	display: block;
+	position: relative;
+	width: 100%;
+}
+
+nui-slider .nui-slider-native {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+	pointer-events: none;
+}
+
+nui-slider .nui-slider-track {
+	width: 100%;
+	height: 2rem;
+	position: relative;
+	touch-action: none;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+}
+
+/* Visual track - slim appearance, large hit area */
+nui-slider .nui-slider-track::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	right: 0;
+	height: 0.25rem;
+	background: light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15));
+	box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+	border-radius: 99px;
+}
+
+nui-slider .nui-slider-fill {
+	width: 50%;
+	height: 0.25rem;
+	background: var(--color-highlight);
+	border-radius: 99px;
+	pointer-events: none;
+	position: relative;
+	z-index: 1;
+}
+
+nui-slider .nui-slider-thumb {
+	width: 1rem;
+	height: 1rem;
+	background: var(--color-highlight);
+	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	border-radius: 50%;
+	pointer-events: none;
+	transition: transform 0.1s;
+	z-index: 2;
+}
+
+nui-slider .nui-slider-thumb.active {
+	transform: translate(-50%, -50%) scale(1.4);
+}
+
+nui-slider.dragging .nui-slider-thumb {
+	transition: none;
+}
+
+/* Focus state - show focus ring on track when native input is focused */
+nui-slider:focus-within .nui-slider-track::before {
+	outline: 2px solid var(--color-highlight);
+	outline-offset: 2px;
+}
+
+/* ################################# nui-table COMPONENT */
+
+/* =============================================================================
+   BASE TABLE STYLING (Works without component wrapper)
+   ============================================================================= */
+
+table {
+	width: 100%;
+	border-collapse: collapse;
+	background-color: light-dark(var(--color-shade1), var(--color-shade2));
+	color: var(--color-text);
+}
+
+th,
+td {
+	border: var(--border-thickness) solid var(--border-shade3);
+	padding: var(--nui-space-half);
+	text-align: left;
+	vertical-align: top;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: normal;
+	word-break: break-word;
+}
+
+th {
+	background-color: var(--color-shade4);
+	color: var(--color-text);
+	font-weight: bold;
+}
+
+tfoot {
+	background-color: var(--color-shade1);
+	color: var(--color-text);
+	font-weight: bold;
+}
+
+caption {
+	padding: var(--nui-space-half);
+	font-weight: bold;
+	text-align: left;
+	caption-side: top;
+}
+
+/* =============================================================================
+   NUI-TABLE COMPONENT (Adds scrolling and responsive behavior)
+   ============================================================================= */
+
+nui-table {
+	display: block;
+	width: 100%;
+	overflow-x: auto;
+	margin-block-end: var(--nui-space);
+}
+nui-table table td,
+nui-table table th {
+	padding: var(--nui-space-half);
+	padding-left: calc(var(--nui-space) * 0.75);
+	padding-right: calc(var(--nui-space) * 0.75);
+}
+
+/* Responsive Table Enhancement */
+/* Tablet breakpoint: 640px (--nui-breakpoint-tablet) */
+@media (max-width: 640px) {
+
+	nui-table table.nui-table-enhanced,
+	nui-table table.nui-table-enhanced thead,
+	nui-table table.nui-table-enhanced tbody,
+	nui-table table.nui-table-enhanced th,
+	nui-table table.nui-table-enhanced td,
+	nui-table table.nui-table-enhanced tr {
+		display: block;
+	}
+
+	nui-table,
+	nui-table table {
+		overflow-x: unset;
+		border: none;
+		background-color: transparent;
+	}
+
+	nui-table table.nui-table-enhanced thead tr {
+		position: absolute;
+		top: -9999px;
+		left: -9999px;
+	}
+
+	nui-table table.nui-table-enhanced tr {
+		background: var(--color-shade2);
+		margin-bottom: var(--nui-space);
+		border-radius: var(--border-radius3);
+		border: var(--border-thickness) solid var(--border-shade3);
+		box-shadow: none;
+		padding: 0;
+		filter: drop-shadow(0 0 0.5rem light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.3)));
+	}
+
+	nui-table table.nui-table-enhanced td {
+		border: none;
+		border-bottom: var(--border-thickness) solid var(--border-shade4);
+		border-radius: 0;
+		padding: var(--nui-space-half);
+		padding-left: calc(var(--nui-space) * 0.75);
+		padding-right: calc(var(--nui-space) * 0.75);
+		color: var(--color-text);
+		width: 100%;
+		max-width: 100%;
+		box-sizing: border-box;
+		background: none;
+		position: relative;
+		text-align: left;
+		vertical-align: middle;
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		justify-content: flex-start;
+	}
+
+	nui-table table.nui-table-enhanced td:last-child {
+		border-bottom: none;
+	}
+
+	nui-table table.nui-table-enhanced td:before {
+		display: block;
+		width: 100%;
+		margin-bottom: 0.25em;
+		padding: 0;
+		white-space: normal;
+		text-align: left;
+		font-weight: 500;
+		color: var(--color-text-dim);
+		opacity: 0.8;
+		font-size: var(--font-size-small);
+		content: attr(data-label);
+		box-sizing: border-box;
+	}
+}
+
+
+/* =============================================================================
+   BASE IMAGE & FIGURE STYLING (Works without component wrapper)
+   ============================================================================= */
+
+/* Images within paragraphs or figures fill container width */
+p img,
+figure img {
+	width: 100%;
+	height: auto;
+	display: block;
+}
+
+/* Figure container */
+figure {
+	margin: 0;
+	margin-bottom: var(--nui-space);
+}
+
+/* Figure caption */
+figcaption {
+	width: 100%;
+	padding: var(--nui-space-half);
+	background-color: light-dark(var(--color-shade2), var(--color-shade3));
+	color: var(--color-text);
+	font-size: var(--font-size-small);
+	line-height: 1.4;
+	box-sizing: border-box;
+}
+
+
+/* =============================================================================
+   BASE INPUT STYLING (Works without component wrapper)
+   ============================================================================= */
+
+fieldset {
+	border: var(--border-thickness) solid light-dark(rgba(0, 0, 0, 0.3), rgba(255, 255, 255, 0.2));
+	border-radius: var(--border-radius2);
+	padding: var(--nui-space);
+	margin: 0 0 var(--nui-space) 0;
+	background-color: light-dark(rgb(245, 245, 245), rgb(30, 30, 30));
+}
+
+legend {
+	padding: 0 var(--nui-space-half);
+	color: var(--color-text);
+	font-size: var(--font-size-xsmall);
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+}
+
+
+/* Lists in fieldsets - no bullets or indentation */
+fieldset ul,
+fieldset ol {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+fieldset label {
+	display: block;
+	margin-bottom: var(--nui-space-quarter);
+	color: var(--color-text-dim);
+	font-size: var(--font-size-small);
+}
+
+textarea {
+	width: 100%;
+	min-height: calc(calc(var(--nui-space) * 2.5) * 2);
+	padding: var(--nui-space);
+	background: light-dark(var(--color-white), var(--color-shade3));
+	border: solid var(--border-thickness) var(--color-shade4);
+	border-radius: var(--border-radius1);
+	color: var(--color-text-dim);
+	font-family: var(--system-ui);
+	font-size: 1rem;
+	line-height: 1.5;
+	outline: none;
+	transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+	box-sizing: border-box;
+	margin: 0;
+	resize: vertical;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="url"],
+input[type="tel"],
+input[type="search"],
+input[type="number"],
+input[type="date"],
+input[type="datetime-local"],
+input[type="month"],
+input[type="week"],
+input[type="time"] {
+	width: 100%;
+	min-height: calc(var(--nui-space) * 2.5);
+	padding: 0 var(--nui-space);
+	background: light-dark(var(--color-white), var(--color-shade3));
+	border: solid var(--border-thickness) transparent;
+	border-bottom: solid var(--border-thickness) var(--color-shade4);
+	color: var(--color-text-dim);
+	font-family: var(--system-ui);
+	font-size: var(--font-size-base);
+	line-height: 1.5;
+	outline: none;
+	transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+	box-sizing: border-box;
+	margin: 0;
+	display: block;
+}
+
+
+
+
+/* =============================================================================
+   BASE BUTTON STYLING (Works without component wrapper)
+   ============================================================================= */
+
+button,
+input[type="submit"],
+input[type="reset"],
+input[type="button"] {
+	position: relative;
+	min-width: var(--nui-space-double);
+	min-height: var(--nui-space-double);
+	padding: var(--nui-space-quarter) var(--nui-space);
+	margin: 0;
+	font-size: var(--font-size-small);
+	line-height: 0.8rem;
+	font-family: var(--system-ui);
+	background-color: var(--color-highlight-dim);
+	color: var(--color-white);
+	border: solid var(--border-thickness) light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+	border-radius: var(--border-radius1);
+	cursor: pointer;
+	transition: background-color 0.2s ease, color 0.2s ease;
+	white-space: nowrap;
+	user-select: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.375rem;
+	appearance: none;
+	vertical-align: top;
+}
+
+button:hover,
+input[type="submit"]:hover,
+input[type="reset"]:hover,
+input[type="button"]:hover {
+	background-color: var(--color-highlight);
+	color: var(--color-white);
+}
+
+button:focus-visible,
+input[type="submit"]:focus-visible,
+input[type="reset"]:focus-visible,
+input[type="button"]:focus-visible {
+	outline: 2px solid var(--color-highlight);
+	outline-offset: 2px;
+}
+
+button:disabled,
+input[type="submit"]:disabled,
+input[type="reset"]:disabled,
+input[type="button"]:disabled {
+	opacity: 0.4;
+	pointer-events: none;
+	cursor: not-allowed;
+}
+
+/* Submit button variant */
+button[type="submit"],
+input[type="submit"] {
+	background-color: var(--palette-activate);
+}
+
+button[type="submit"]:hover,
+input[type="submit"]:hover {
+	background-color: var(--palette-activate-hi);
+}
+
+/* Reset button variant */
+button[type="reset"],
+input[type="reset"] {
+	background-color: var(--palette-gray);
+}
+
+button[type="reset"]:hover,
+input[type="reset"]:hover {
+	background-color: var(--palette-gray-hi);
+}
+
+
+
+
+/* Full-width breakout - handled above in nui-page section
+   Breakout elements use max-width: 100% to fill container without overflow */
+
+/* Backward compatibility - nui-layout[banner] still works */
+nui-layout[banner] {
+	max-width: 100%;
+	padding: 0;
+}
+
+nui-layout[banner] .maxwidth-container,
+nui-page>[breakout] .maxwidth-container {
+	padding: var(--nui-space) var(--nui-space-double);
+	max-width: var(--space-page-maxwidth);
+	box-sizing: border-box;
+}
+
+/* nui Scrollbar */
+/* ######################################################################################### */
+::-webkit-scrollbar {
+	width: var(--space-scrollbar-width);
+}
+
+::-webkit-scrollbar-track {
+	background: light-dark(var(--color-shade2), var(--color-shade3));
+}
+
+::-webkit-scrollbar-thumb {
+	background: light-dark(var(--color-shade3), var(--color-shade5));
+	min-height: 5rem;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: light-dark(var(--color-shade4), var(--color-shade6));
+}
+
+.visually-hidden {
+	position: absolute !important;
+	width: 1px !important;
+	height: 1px !important;
+	padding: 0 !important;
+	margin: -1px !important;
+	overflow: hidden !important;
+	clip: rect(0, 0, 0, 0) !important;
+	white-space: nowrap !important;
+	border: 0 !important;
+}
+
+
+/* =============================================================================
+   MOBILE SELECT MODAL
+   ============================================================================= */
+
+/* Mobile Bottom Sheet */
+.nui-modal-backdrop {
+	position: fixed;
+	inset: 0;
+	background: light-dark(rgba(0, 0, 0, .5), rgba(0, 0, 0, .7));
+	z-index: 9998;
+	opacity: 0;
+	transition: opacity .2s;
+}
+
+.nui-modal-backdrop[hidden] {
+	display: none;
+}
+
+.nui-modal-backdrop.is-open {
+	opacity: 1;
+}
+
+.nui-select-sheet {
+	position: fixed;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	max-height: 100vh;
+	max-height: 100dvh;
+	background: var(--color-shade1);
+	z-index: 9999;
+	border-radius: var(--border-radius2) var(--border-radius2) 0 0;
+	display: flex;
+	flex-direction: column;
+	transform: translateY(100%);
+	transition: transform .2s cubic-bezier(.1, .9, .2, 1);
+	box-shadow: 0 -4px 12px rgba(0, 0, 0, .15);
+}
+
+.nui-modal-backdrop.is-open .nui-select-sheet {
+	transform: translateY(0);
+}
+
+.nui-select-sheet-tags {
+	padding: var(--nui-space-half);
+	border-bottom: 1px solid var(--border-shade1);
+}
+
+.nui-sheet-tags-toggle {
+	width: 100%;
+	text-align: left;
+	padding: var(--nui-space-half);
+	background: transparent;
+	border: none;
+	font-weight: 500;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	cursor: pointer;
+	font-size: .9rem;
+	color: var(--color-highlight);
+}
+
+.nui-sheet-tags-toggle.is-expanded span:last-child {
+	transform: rotate(180deg);
+}
+
+.nui-select-sheet-content {
+	flex: 1;
+	overflow-y: auto;
+	-webkit-overflow-scrolling: touch;
+	padding-bottom: env(safe-area-inset-bottom);
+}
+
+.nui-select-sheet-content:has(+ .nui-select-sheet-search:not(:empty)) {
+	padding-bottom: 0;
+}
+
+.nui-select-sheet-content .nui-select-options {
+	position: static;
+	border: none;
+	box-shadow: none;
+	max-height: none;
+	background: transparent;
+}
+
+.nui-select-sheet-search {
+	padding: var(--nui-space-half);
+	padding-bottom: max(var(--nui-space-half), env(safe-area-inset-bottom));
+	background: var(--color-shade2);
+	border-top: 1px solid var(--border-shade1);
+}
+
+.nui-select-sheet-search:empty {
+	display: none;
+}
+
+.nui-select-sheet-search .nui-select-search {
+	position: static;
+	border: none;
+	padding: 0;
+	background: transparent;
+}
+
+.nui-select-sheet-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: stretch;
+	border-bottom: 1px solid var(--border-shade1);
+	background: var(--color-shade1);
+	border-radius: var(--border-radius2) var(--border-radius2) 0 0;
+}
+
+.nui-select-sheet-label {
+	padding: var(--nui-space) 0 var(--nui-space) var(--nui-space-double);
+	font-weight: 500;
+	font-size: 1.1em;
+	display: flex;
+	align-items: center;
+}
+
+.nui-select-sheet-header nui-button {
+	margin: 0;
+	display: flex;
+}
+
+.nui-select-sheet-header nui-button button {
+	padding: 0 var(--nui-space-double) 0 var(--nui-space);
+	color: var(--color-highlight);
+	background: transparent;
+	border: none;
+	height: 100%;
+	border-radius: 0 var(--border-radius2) 0 0;
+	cursor: pointer;
+}
+
+.nui-select-sheet-header nui-button nui-icon {
+	color: var(--color-highlight);
+}
+
+
+/* ==========================================================================
+   nui-progress component
+   ========================================================================== */
+
+nui-progress {
+	display: block;
+	width: 100%;
+}
+
+nui-progress[type="circular"] {
+	width: var(--nui-progress-size, clamp(2rem, 48px, 3rem));
+	height: var(--nui-progress-size, clamp(2rem, 48px, 3rem));
+	display: inline-flex;
+	vertical-align: middle;
+}
+
+nui-progress .progress-circular-wrapper {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100%;
+}
+
+nui-progress .progress-circular {
+	width: 100%;
+	height: 100%;
+	display: block;
+	transform: rotate(-90deg);
+}
+
+nui-progress .progress-bg {
+	fill: none;
+	stroke: var(--color-shade3);
+	stroke-width: 3.8;
+}
+
+nui-progress .progress-value {
+	fill: none;
+	stroke: var(--color-highlight);
+	stroke-width: 3.8;
+	transition: stroke-dasharray 0.3s ease;
+}
+
+nui-progress .progress-bar-wrapper {
+	display: flex;
+	align-items: center;
+	gap: var(--nui-space);
+	width: 100%;
+}
+
+nui-progress .progress-bar-track {
+	flex: 1;
+	height: var(--nui-progress-size, var(--nui-space-half));
+	background: var(--color-shade3);
+	border-radius: var(--border-radius1);
+	overflow: hidden;
+}
+
+nui-progress .progress-bar-fill {
+	height: 100%;
+	background: var(--color-highlight);
+	transition: width 0.3s ease;
+}
+
+nui-progress .progress-label {
+	font-size: 0.75em;
+	font-weight: 600;
+	color: var(--color-text-light); /* Or default text color */
+	font-variant-numeric: tabular-nums;
+}
+
+nui-progress[type="circular"] .progress-label {
+	position: absolute;
+	font-size: 0.65em;
+}
+
+nui-progress .progress-busy {
+	width: 100%;
+	height: var(--nui-progress-size, var(--nui-space-half));
+	background: var(--color-shade3);
+	border-radius: var(--border-radius1);
+	overflow: hidden;
+	position: relative;
+}
+
+nui-progress .progress-busy::after {
+	content: '';
+	position: absolute;
+	top: 0;
+	left: 0;
+	bottom: 0;
+	width: 30%;
+	background: var(--color-highlight);
+	animation: nui-progress-busy 1.5s infinite ease-in-out;
+}
+
+@keyframes nui-progress-busy {
+	0% { left: -30%; width: 30%; }
+	50% { width: 50%; }
+	100% { left: 100%; width: 30%; }
+}
+
+nui-progress[type="circular-busy"] {
+	width: var(--nui-progress-size, calc(var(--nui-space-double, 2rem) * 0.7));
+	height: var(--nui-progress-size, calc(var(--nui-space-double, 2rem) * 0.7));
+	display: inline-flex;
+	vertical-align: middle;
+}
+
+nui-progress .progress-circular-busy {
+	width: 100%;
+	height: 100%;
+	display: block;
+	transform-origin: center center;
+	animation: nui-progress-circular-rotate 1.5s linear infinite;
+}
+
+nui-progress .progress-circular-busy .progress-value {
+	animation: nui-progress-circular-dash 1.5s ease-in-out infinite;
+	stroke-linecap: round;
+}
+
+@keyframes nui-progress-circular-rotate {
+	100% { transform: rotate(360deg); }
+}
+
+@keyframes nui-progress-circular-dash {
+	0% { stroke-dasharray: 1, 100; stroke-dashoffset: 0; }
+	50% { stroke-dasharray: 60, 100; stroke-dashoffset: -25; }
+	100% { stroke-dasharray: 60, 100; stroke-dashoffset: -100; }
+}
+
+/* =============================================================================
+   nui-sortable COMPONENT
+   ============================================================================= */
+
+nui-sortable {
+	display: flex;
+	flex-direction: column;
+	gap: var(--nui-space-eighth);
+	position: relative;
+}
+
+nui-sortable-item {
+	display: flex;
+	align-items: center;
+	padding: var(--nui-space-half) var(--nui-space);
+	background: light-dark(var(--color-shade1), var(--color-shade2));
+	border: solid var(--border-thickness) var(--border-shade2);
+	border-radius: var(--border-radius1);
+	gap: var(--nui-space-half);
+	user-select: none;
+	touch-action: none; /* Required for pointer events panning */
+	will-change: transform;
+	transition: background 0.2s;
+}
+
+nui-sortable-item:hover {
+	background: light-dark(var(--color-shade2), var(--color-shade3));
+}
+
+nui-sortable-item:focus-visible {
+	outline: 2px solid var(--color-highlight);
+	outline-offset: -2px;
+	background: light-dark(var(--color-shade2), var(--color-shade3));
+	z-index: 10;
+}
+
+nui-sortable-item[data-keyboard-drag="true"] {
+	background: var(--color-highlight);
+	color: var(--color-white);
+	box-shadow: 0 8px 16px var(--shadow-color);
+	transform: scale(1.02);
+	z-index: 100;
+}
+
+nui-sortable-item[data-keyboard-drag="true"] .drag-handle {
+	color: var(--color-white);
+}
+
+nui-sortable-item:not(:has(.drag-handle)) {
+	cursor: grab;
+}
+
+nui-sortable-item:not(:has(.drag-handle)):active {
+	cursor: grabbing;
+}
+
+nui-sortable-item .drag-handle {
+	cursor: grab;
+	padding: var(--nui-space-quarter);
+	margin-left: calc(-1 * var(--nui-space-quarter));
+	color: var(--color-text-muted);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+nui-sortable-item .drag-handle:active {
+	cursor: grabbing;
+}
+
+nui-sortable-item.nui-sortable-dragged {
+	position: absolute !important;
+	z-index: 100 !important;
+	box-shadow: 0 8px 16px var(--shadow-color);
+	opacity: 0.95;
+	margin: 0 !important;
+}
+
+nui-sortable[data-layout="grid"] > nui-sortable-item.nui-sortable-dragged {
+	grid-column: 1 / -1;
+	grid-row: 1 / -1;
+}
+
+nui-sortable[data-layout="horizontal"] {
+	flex-direction: row;
+	flex-wrap: wrap;
+	gap: var(--nui-space-half);
+}
+
+nui-sortable[data-layout="grid"] {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+	gap: var(--nui-space-half);
+}
+
+nui-sortable[data-layout="grid"] nui-sortable-item {
+	flex-direction: column;
+	justify-content: center;
+	text-align: center;
+	gap: var(--nui-space-quarter);
+	padding: var(--nui-space);
+}
+
+nui-sortable[data-layout="grid"] nui-sortable-item .drag-handle {
+	margin-left: 0;
+	margin-bottom: var(--nui-space-eighth);
+}
+
+.nui-sortable-placeholder {
+	background: transparent;
+	border: dashed var(--border-thickness) var(--border-shade3);
+	border-radius: var(--border-radius1);
+	opacity: 0.5;
+	pointer-events: none;
+}
+
+/* =============================================================================
+   nui-card Component
+   ============================================================================= */
+
+nui-card,
+  .nui-card {
+        display: flex;
+        flex-direction: column;
+        background: light-dark(var(--color-shade1), var(--color-shade2));
+        border: solid var(--border-thickness) light-dark(rgb(0, 0, 0, 0.2), var(--border-shade2));
+        border-radius: var(--border-radius2);
+        box-shadow: 0 0.3rem 1rem light-dark(rgb(0, 0, 0, 0.1), rgba(0, 0, 0, 0.3));
+        position: relative;
+        transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  }
+
+nui-card,
+  .nui-card {
+        padding: var(--nui-space);
+        gap: var(--nui-space);
+        margin-bottom: var(--nui-space);
+  }
+
+nui-card > *:first-child {
+	margin-top: 0;
+}
+
+nui-card > *:last-child {
+	margin-bottom: 0;
+}
+
+  nui-card[layout="horizontal"] {
+        flex-direction: row;
+  }
+
+  nui-card > img {
+        object-fit: cover;
+  }
+
+  nui-card:not([layout]) > img {
+        width: calc(100% + calc(var(--nui-space) * 2));
+        max-width: calc(100% + calc(var(--nui-space) * 2));
+        margin: calc(var(--nui-space) * -1);
+        margin-bottom: 0;
+        height: 40%;
+        min-height: 150px;
+  }
+
+  nui-card[layout="horizontal"] > img {
+        width: 35%;
+        min-width: 150px;
+        max-width: 250px;
+        margin: calc(var(--nui-space) * -1);
+        margin-right: 0;
+        width: 35%;
+        height: auto;
+}
+
+/* Image-only layout */
+nui-card[layout="image-only"] {
+	justify-content: flex-end;
+	padding: 0;
+}
+nui-card[layout="image-only"] img {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	z-index: 0;
+}
+nui-card[layout="image-only"] > *:not(img) {
+	position: relative;
+	z-index: 1;
+}
+
+/* Interactive card */
+nui-card[interactive] {
+	cursor: pointer;
+}
+
+nui-card[interactive]:hover,
+nui-card[interactive]:focus-within {
+	box-shadow: 0 6px 12px var(--shadow-color);
+	transform: translateY(-2px);
+	border-color: var(--border-shade3);
+}
+
+/* Expandable Clickable Area */
+nui-card[interactive] a.nui-card-link::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: 10;
+}
+
+/* Flip Card Support */
+nui-card[layout="flip"] {
+	perspective: 1000px;
+	background: transparent;
+	border: none;
+	box-shadow: none;
+	overflow: visible;
+	padding: 0;
+	display: block;
+}
+nui-card[layout="flip"][interactive]:hover,
+nui-card[layout="flip"][interactive]:focus-within {
+	transform: none; /* Let the inner part rotate, outer container stays still */
+	box-shadow: none;
+	border-color: transparent;
+}
+nui-card[layout="flip"] .nui-card-inner {
+	display: block;
+	position: relative;
+	width: 100%;
+	height: 100%;
+	min-height: inherit; /* Ensure inner takes height of card */
+	transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+	transform-style: preserve-3d;
+}
+nui-card[layout="flip"][flipped] .nui-card-inner {
+	transform: rotateY(180deg);
+}
+nui-card[layout="flip"] .nui-card-front,
+nui-card[layout="flip"] .nui-card-back {
+	display: flex;
+	flex-direction: column;
+	position: absolute;
+	inset: 0;
+	backface-visibility: hidden;
+	-webkit-backface-visibility: hidden;
+	background-color: var(--color-base);
+	border: solid var(--border-thickness) var(--border-shade2);
+	border-radius: var(--border-radius2);
+	box-shadow: 0 2px 4px var(--shadow-color);
+	overflow: hidden;
+}
+nui-card[layout="flip"] .nui-card-back {
+	transform: rotateY(180deg);
+}
+
+/* ################################# nui-tooltip COMPONENT */
+nui-tooltip {
+--tooltip-bg: light-dark(var(--color-shade8), var(--color-shade4));
+--tooltip-text: light-dark(var(--color-base), var(--text-color));
+
+position: fixed;
+background-color: var(--tooltip-bg);
+color: var(--tooltip-text);
+padding: var(--nui-space);
+border-radius: var(--border-radius2);
+box-shadow: 0 4px 12px var(--shadow-color);
+z-index: 9999;
+border: none;
+max-width: 320px;
+word-wrap: break-word;
+overflow: visible;
+
+/* Use standard base size, but allow flexibility */
+font-size: var(--font-size-small);
+line-height: 1.4;
+
+/* Animation hooks */
+transition: opacity 0.2s allow-discrete;
+opacity: 0;
+}
+
+/* Rich content integration */
+nui-tooltip strong, nui-tooltip b, nui-tooltip .title {
+display: block;
+margin-bottom: var(--nui-space-quarter);
+font-size: var(--font-size-base);
+font-weight: 600;
+}
+
+nui-tooltip p {
+margin: 0 0 var(--nui-space-half) 0;
+}
+
+nui-tooltip p:last-child {
+margin-bottom: 0;
+}
+
+nui-tooltip nui-button {
+margin-top: var(--nui-space-quarter);
+/* Ensure buttons inside tooltips fit visually */
+--button-bg-color: var(--color-base);
+--button-text-color: var(--color-contrast);
+}
+
+/* Arrow Pointer */
+nui-tooltip::after {
+content: '';
+position: absolute;
+width: 12px;
+height: 12px;
+background-color: var(--tooltip-bg);
+border-radius: 2px;
+pointer-events: none;
+z-index: -1;
+}
+
+nui-tooltip[data-placement="top"]::after {
+bottom: -5px;
+left: var(--arrow-left, 50%);
+transform: translateX(-50%) rotate(45deg);
+}
+
+nui-tooltip[data-placement="bottom"]::after {
+top: -5px;
+left: var(--arrow-left, 50%);
+transform: translateX(-50%) rotate(45deg);
+}
+
+nui-tooltip[data-placement="left"]::after {
+right: -5px;
+top: var(--arrow-top, 50%);
+transform: translateY(-50%) rotate(45deg);
+}
+
+nui-tooltip[data-placement="right"]::after {
+left: -5px;
+top: var(--arrow-top, 50%);
+transform: translateY(-50%) rotate(45deg);
+}
+
+nui-tooltip:popover-open {
+opacity: 1;
+}
+
+@starting-style {
+nui-tooltip:popover-open {
+opacity: 0;
+}
+}
