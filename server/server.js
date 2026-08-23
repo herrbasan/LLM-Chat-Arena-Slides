@@ -1299,6 +1299,15 @@ app.post('/api/v3/export/:id', (req, res) => {
             fs.copyFileSync(path.join(EXPORT_TEMPLATE_ROOT, f), path.join(outDir, f));
         }
 
+        // Vendor the NUI runtime for the player chrome (core components
+        // only: button/icon/slider/select/loading + theme + icon sprite).
+        const NUI_ROOT = path.join(__dirname, '../modules/nui_wc2/NUI');
+        for (const f of ['nui.js', 'css/nui-theme.css', 'assets/material-icons-sprite.svg']) {
+            const dst = path.join(outDir, 'nui', f);
+            fs.mkdirSync(path.dirname(dst), { recursive: true });
+            fs.copyFileSync(path.join(NUI_ROOT, f), dst);
+        }
+
         // Copy each referenced audio file once (the bucket dedups by
         // content hash; paragraphs can share a file) and rewrite the
         // URL to the relative export path.

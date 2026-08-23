@@ -1,7 +1,10 @@
-// Arena Slides export player — standalone, zero dependencies.
+// Arena Slides export player — vendored NUI chrome
+// (button/icon/slider/select/loading + theme + icon sprite).
 // Ports the v3 playback core from web/js/pages/render.js: virtual slide
-// chunking, per-paragraph audio chaining, rAF word highlighting.
+// chunking, per-paragraph audio chaining, rAF word highlighting, seek.
 // Consumes project.json (written by POST /api/v3/export/:id).
+
+import { nui } from './nui/nui.js';
 
 const audio = new Audio();
 const state = {
@@ -14,13 +17,17 @@ const state = {
     currentParaIdx: -1,  // which paragraph is playing (-1 = none)
     cumulativeMs: 0,     // total ms of finished paragraphs in this slide
     totalDurationMs: 0,  // total duration of all paragraphs in this slide
-    rafId: null
+    rafId: null,
+    seeking: false       // user is dragging the playhead
 };
 
 const el = {};
-['player-title', 'player-counter', 'player-slide-content', 'playback-progress-fill',
- 'time-display', 'btn-play', 'btn-prev', 'btn-next', 'speed-select']
+['player-title', 'player-counter', 'player-slide-content',
+ 'time-display', 'btn-play', 'btn-prev', 'btn-next', 'speed-select',
+ 'play-icon', 'buffering-indicator']
     .forEach(id => { el[id.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = document.getElementById(id); });
+const seekSlider = document.getElementById('seek-slider');
+const seekInput = seekSlider.querySelector('input');
 
 function escapeHtml(s) {
     return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -250,7 +257,6 @@ function loadSlide(idx) {
     loadParagraphAudio(slide._paragraphs || []);
     el.playerCounter.textContent = `${idx + 1} / ${state.slides.length}`;
     updateControls();
-    updateProgress(0);
     updateTimeDisplay(0, state.totalDurationMs);
 }
 
@@ -261,6 +267,8 @@ function loadParagraphAudio(paragraphs) {
     state.currentParaIdx = -1;
     state.cumulativeMs = 0;
     state.totalDurationMs = paragraphs.reduce((sum, p) => sum + (p.durationMs || 0), 0);
+    seekInput.max = String(state.totalDurationMs);
+    seekInput.value = '0';
     const first = paragraphs.findIndex(p => p.audioUrl && p.words?.length > 0);
     if (first >= 0) {
         state.currentParaIdx = first;
@@ -293,11 +301,6 @@ function updateWordHighlight(currentTimeMs) {
     });
 }
 
-function updateProgress(currentTimeMs) {
-    const pct = state.totalDurationMs > 0 ? (currentTimeMs / state.totalDurationMs) * 100 : 0;
-    el.playbackProgressFill.style.width = Math.min(pct, 100) + '%';
-}
-
 function updateTimeDisplay(currentMs, durationMs) {
     const fmt = ms => {
         const s = Math.floor(ms / 1000);
@@ -317,7 +320,7 @@ function animationLoop() {
     const localTimeMs = audio.currentTime * 1000;
     const totalElapsedMs = state.cumulativeMs + localTimeMs;
     updateWordHighlight(localTimeMs);
-    updateProgress(totalElapsedMs);
+    if (!state.seeking) seekInput.value = String(Math.round(totalElapsedMs));
     updateTimeDisplay(totalElapsedMs, state.totalDurationMs);
     state.rafId = requestAnimationFrame(animationLoop);
 }
@@ -327,14 +330,20 @@ function stopLoop() { if (state.rafId) { cancelAnimationFrame(state.rafId); stat
 
 audio.addEventListener('play', () => {
     state.isPlaying = true;
-    el.btnPlay.textContent = 'Pause';
+    el.playIcon.setAttribute('name', 'pause');
     startLoop();
 });
 audio.addEventListener('pause', () => {
     state.isPlaying = false;
-    el.btnPlay.textContent = 'Play';
+    el.playIcon.setAttribute('name', 'play');
     stopLoop();
 });
+
+// Buffering indicator: matters when the export is hosted — MP3s stream
+// over the network and the next paragraph/slide may not be ready yet.
+audio.addEventListener('waiting', () => { el.bufferingIndicator.hidden = false; });
+audio.addEventListener('playing', () => { el.bufferingIndicator.hidden = true; });
+audio.addEventListener('canplaythrough', () => { el.bufferingIndicator.hidden = true; });
 audio.addEventListener('ended', () => {
     // Stop the loop immediately: between `ended` and the next
     // paragraph's `play`, audio.currentTime is stale and would flash
@@ -355,7 +364,7 @@ audio.addEventListener('ended', () => {
 
     // Slide finished — mark everything past, advance to the next slide
     el.playerSlideContent.querySelectorAll('.word').forEach(w => { w.className = 'word past'; });
-    updateProgress(state.totalDurationMs);
+    seekInput.value = String(state.totalDurationMs);
     if (state.currentSlideIdx < state.slides.length - 1) {
         loadSlide(state.currentSlideIdx + 1);
         audio.play().catch(() => {});
@@ -375,6 +384,58 @@ function goToSlide(idx) {
     if (wasPlaying) audio.play().catch(() => {});
 }
 
+// ─── Seek ───
+// The slider spans the slide's total duration across all paragraphs.
+// 'input' previews the target time while dragging; 'change' performs
+// the seek: map the cumulative target to (paragraph, local offset).
+
+seekInput.addEventListener('input', () => {
+    state.seeking = true;
+    updateTimeDisplay(parseFloat(seekInput.value) || 0, state.totalDurationMs);
+});
+
+seekInput.addEventListener('change', () => {
+    const targetMs = parseFloat(seekInput.value) || 0;
+    state.seeking = false;
+
+    // Find the paragraph containing the target time.
+    let acc = 0;
+    let targetIdx = -1;
+    let localMs = 0;
+    for (let i = 0; i < state.paragraphs.length; i++) {
+        const p = state.paragraphs[i];
+        if (!p.audioUrl || !(p.words?.length > 0)) continue;
+        const dur = p.durationMs || 0;
+        if (targetMs < acc + dur || i === state.paragraphs.length - 1) {
+            targetIdx = i;
+            localMs = Math.max(0, Math.min(targetMs - acc, dur));
+            break;
+        }
+        acc += dur;
+    }
+    if (targetIdx < 0) return;
+
+    state.cumulativeMs = acc;
+    state.currentParaIdx = targetIdx;
+    const targetSrc = state.paragraphs[targetIdx].audioUrl;
+    const wasPlaying = state.isPlaying;
+
+    const applyOffset = () => {
+        audio.currentTime = localMs / 1000;
+        updateWordHighlight(localMs);
+        updateTimeDisplay(acc + localMs, state.totalDurationMs);
+        if (wasPlaying) audio.play().catch(() => {});
+    };
+
+    if (!audio.src.endsWith(targetSrc)) {
+        audio.src = targetSrc;
+        audio.playbackRate = state.playbackSpeed;
+        audio.addEventListener('loadedmetadata', applyOffset, { once: true });
+    } else {
+        applyOffset();
+    }
+});
+
 el.btnPlay.addEventListener('click', togglePlay);
 el.btnPrev.addEventListener('click', () => goToSlide(state.currentSlideIdx - 1));
 el.btnNext.addEventListener('click', () => goToSlide(state.currentSlideIdx + 1));
@@ -389,6 +450,8 @@ document.addEventListener('keydown', e => {
 });
 
 // ─── Boot ───
+
+await nui.ready();
 
 fetch('project.json')
     .then(res => {
