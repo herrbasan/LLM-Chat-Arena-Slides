@@ -1261,10 +1261,12 @@ app.post('/api/v3/clean-text', async (req, res) => {
     }
 });
 
-// ─── v3 Export (static player bundle) ──────────────────────
-// Writes a self-contained static player for a fully-rendered project:
-// index.html + player.js + player.css + project.json + audio/*.mp3.
-// The folder runs on any static host; locally served at /exports/{slug}/.
+// ─── v3 Export (project data for the standalone player) ─────
+// Writes data only: project.json + audio/*.mp3 into
+// server/data/exports/{slug}/. The player itself is served once from
+// server/export-template/ at /player/ and loads any export via
+// ?src=/exports/{slug}/project.json. For static hosting, deploy the
+// template folder once and point it at the data folder(s).
 const EXPORT_TEMPLATE_ROOT = path.join(__dirname, 'export-template');
 
 app.post('/api/v3/export/:id', (req, res) => {
@@ -1295,18 +1297,9 @@ app.post('/api/v3/export/:id', (req, res) => {
         fs.rmSync(outDir, { recursive: true, force: true });
         fs.mkdirSync(path.join(outDir, 'audio'), { recursive: true });
 
-        for (const f of ['index.html', 'player.js', 'player.css']) {
-            fs.copyFileSync(path.join(EXPORT_TEMPLATE_ROOT, f), path.join(outDir, f));
-        }
-
-        // Vendor the NUI runtime for the player chrome (core components
-        // only: button/icon/slider/select/loading + theme + icon sprite).
-        const NUI_ROOT = path.join(__dirname, '../modules/nui_wc2/NUI');
-        for (const f of ['nui.js', 'css/nui-theme.css', 'assets/material-icons-sprite.svg']) {
-            const dst = path.join(outDir, 'nui', f);
-            fs.mkdirSync(path.dirname(dst), { recursive: true });
-            fs.copyFileSync(path.join(NUI_ROOT, f), dst);
-        }
+        // The player is NOT copied per export — it is served standalone
+        // at /player/ and loads any project via ?src=. An export is data
+        // only: project.json + audio/*.mp3.
 
         // Copy each referenced audio file once (the bucket dedups by
         // content hash; paragraphs can share a file) and rewrite the
@@ -1347,7 +1340,7 @@ app.post('/api/v3/export/:id', (req, res) => {
         fs.writeFileSync(path.join(outDir, 'project.json'), JSON.stringify(project));
 
         console.log(`[Export] ${slug}: ${urlByRef.size} audio files, ${project.messages.length} messages`);
-        res.json({ slug, url: `/exports/${slug}/`, audioFiles: urlByRef.size });
+        res.json({ slug, url: `/player/?src=/exports/${slug}/project.json`, audioFiles: urlByRef.size });
     } catch (err) {
         console.error('[Server] v3 export failed:', err.message);
         res.status(500).json({ error: err.message });
@@ -1651,7 +1644,15 @@ app.use(express.static(path.join(__dirname, '../web')));
 // Serve the NUI components directly mapping to /nui
 app.use('/nui', express.static(path.join(__dirname, '../modules/nui_wc2/NUI')));
 
-// Exported static player bundles (POST /api/v3/export/:id)
+// The standalone export player (loads any exported project via ?src=)
+app.use('/player', express.static(EXPORT_TEMPLATE_ROOT));
+// Its NUI runtime is served straight from the submodule — no vendored
+// copies that could drift (for static hosting, copy NUI/{nui.js,
+// css/nui-theme.css, assets/material-icons-sprite.svg} next to the
+// player as nui/).
+app.use('/player/nui', express.static(path.join(__dirname, '../modules/nui_wc2/NUI')));
+
+// Exported project data (project.json + audio) for the player
 app.use('/exports', express.static(path.join(dbPath, 'exports')));
 
 // Serve modules (for nui addon imports from web/)

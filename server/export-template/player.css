@@ -76,6 +76,14 @@ body {
     display: block;
     width: 100%;
 }
+/* Playhead styling: no thumb circle, square track corners. */
+.seek-row .nui-slider-thumb {
+    display: none;
+}
+.seek-row .nui-slider-track::before,
+.seek-row .nui-slider-fill {
+    border-radius: 0;
+}
 
 .controls-row {
     display: flex;

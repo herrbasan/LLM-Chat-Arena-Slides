@@ -268,11 +268,11 @@ function loadParagraphAudio(paragraphs) {
     state.cumulativeMs = 0;
     state.totalDurationMs = paragraphs.reduce((sum, p) => sum + (p.durationMs || 0), 0);
     seekInput.max = String(state.totalDurationMs);
-    seekInput.value = '0';
+    seekSlider.setValue(0);
     const first = paragraphs.findIndex(p => p.audioUrl && p.words?.length > 0);
     if (first >= 0) {
         state.currentParaIdx = first;
-        audio.src = paragraphs[first].audioUrl;
+        audio.src = audioSrc(paragraphs[first].audioUrl);
         audio.playbackRate = state.playbackSpeed;
     } else {
         audio.src = '';
@@ -320,7 +320,9 @@ function animationLoop() {
     const localTimeMs = audio.currentTime * 1000;
     const totalElapsedMs = state.cumulativeMs + localTimeMs;
     updateWordHighlight(localTimeMs);
-    if (!state.seeking) seekInput.value = String(Math.round(totalElapsedMs));
+    // nui-slider only repaints its fill via its setValue API (or native
+    // 'input' events) — assigning input.value leaves the visual stale.
+    if (!state.seeking) seekSlider.setValue(Math.round(totalElapsedMs));
     updateTimeDisplay(totalElapsedMs, state.totalDurationMs);
     state.rafId = requestAnimationFrame(animationLoop);
 }
@@ -355,7 +357,7 @@ audio.addEventListener('ended', () => {
     for (let i = state.currentParaIdx + 1; i < state.paragraphs.length; i++) {
         if (state.paragraphs[i].audioUrl && state.paragraphs[i].words?.length > 0) {
             state.currentParaIdx = i;
-            audio.src = state.paragraphs[i].audioUrl;
+            audio.src = audioSrc(state.paragraphs[i].audioUrl);
             audio.playbackRate = state.playbackSpeed;
             audio.play().catch(() => {});
             return;
@@ -364,7 +366,7 @@ audio.addEventListener('ended', () => {
 
     // Slide finished — mark everything past, advance to the next slide
     el.playerSlideContent.querySelectorAll('.word').forEach(w => { w.className = 'word past'; });
-    seekInput.value = String(state.totalDurationMs);
+    seekSlider.setValue(state.totalDurationMs);
     if (state.currentSlideIdx < state.slides.length - 1) {
         loadSlide(state.currentSlideIdx + 1);
         audio.play().catch(() => {});
@@ -417,7 +419,7 @@ seekInput.addEventListener('change', () => {
 
     state.cumulativeMs = acc;
     state.currentParaIdx = targetIdx;
-    const targetSrc = state.paragraphs[targetIdx].audioUrl;
+    const targetSrc = audioSrc(state.paragraphs[targetIdx].audioUrl);
     const wasPlaying = state.isPlaying;
 
     const applyOffset = () => {
@@ -427,7 +429,7 @@ seekInput.addEventListener('change', () => {
         if (wasPlaying) audio.play().catch(() => {});
     };
 
-    if (!audio.src.endsWith(targetSrc)) {
+    if (audio.src !== targetSrc) {
         audio.src = targetSrc;
         audio.playbackRate = state.playbackSpeed;
         audio.addEventListener('loadedmetadata', applyOffset, { once: true });
@@ -450,10 +452,18 @@ document.addEventListener('keydown', e => {
 });
 
 // ─── Boot ───
+// The player is standalone: ?src= points at any project.json (relative
+// or absolute URL). Audio URLs inside the project are resolved
+// relative to that file's location. Default: ./project.json (legacy
+// single-folder exports).
 
 await nui.ready();
 
-fetch('project.json')
+const srcParam = new URLSearchParams(location.search).get('src') || 'project.json';
+const srcUrl = new URL(srcParam, location.href);
+const audioSrc = (rel) => new URL(rel, srcUrl).href;
+
+fetch(srcUrl)
     .then(res => {
         if (!res.ok) throw new Error(`project.json HTTP ${res.status}`);
         return res.json();
