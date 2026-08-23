@@ -23,7 +23,7 @@ const state = {
 
 const el = {};
 ['player-title', 'player-counter', 'player-slide-content',
- 'time-display', 'btn-play', 'btn-prev', 'btn-next', 'speed-select',
+ 'time-display', 'btn-play', 'btn-prev', 'btn-next',
  'play-icon', 'buffering-indicator']
     .forEach(id => { el[id.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = document.getElementById(id); });
 const seekSlider = document.getElementById('seek-slider');
@@ -441,10 +441,6 @@ seekInput.addEventListener('change', () => {
 el.btnPlay.addEventListener('click', togglePlay);
 el.btnPrev.addEventListener('click', () => goToSlide(state.currentSlideIdx - 1));
 el.btnNext.addEventListener('click', () => goToSlide(state.currentSlideIdx + 1));
-el.speedSelect.addEventListener('change', () => {
-    state.playbackSpeed = parseFloat(el.speedSelect.value) || 1.0;
-    audio.playbackRate = state.playbackSpeed;
-});
 document.addEventListener('keydown', e => {
     if (e.key === ' ') { e.preventDefault(); togglePlay(); }
     else if (e.key === 'ArrowLeft') goToSlide(state.currentSlideIdx - 1);
