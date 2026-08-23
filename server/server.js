@@ -12,7 +12,8 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 // Render concurrency: how many paragraphs to process in parallel.
 // Each paragraph does TTS → align sequentially within its slot.
-// Kokoro (CPU) and Whisper (GPU) both handle concurrent requests.
+// Default for render runs; the render card lets the user pick per run
+// (local engines serialize on the ONNX lock → 1, cloud engines → more).
 const RENDER_CONCURRENCY = parseInt(process.env.RENDER_CONCURRENCY || '4', 10);
 
 // Attempt to load nDB
@@ -31,7 +32,6 @@ const { buildProject } = require('../pipeline/build-messages.js');
 const { parseArenaExport } = require('../pipeline/importer.js');
 const { processInput: ttsProcess } = require('../pipeline/tts.js');
 const { processInput: alignProcess, processProject: alignProject, ALIGNMENT_VERSION } = require('../pipeline/align.js');
-const { speakText } = require('../pipeline/speak-text.js');
 
 // nSpeech/nVoice V3 clients — the only wire-format knowledge in the project.
 const nspeech = require('./nspeech.js');
@@ -217,7 +217,7 @@ function gcAudio() {
 // 503 means the worker model is still loading; connection failure means down.
 async function checkNVoiceAvailable() {
     try {
-        const res = await nvoice.health(getSettings().nvoiceUrl);
+        const res = await nvoice.health(getSettings().nspeechUrl);
         if (res.ok) return true;
         if (res.status === 503) {
             console.warn('[nVoice] Model still loading (503 from /health)');
@@ -252,35 +252,50 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
     const voiceConfig = project.voiceMapping?.[role] || project.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
     const signal = options.signal;
 
-    // Hash must be computed from the spoken text (after speakText
-    // normalization) because that's what the audio actually contains.
-    // Using raw para.text would mismatch for any paragraph with
-    // *emphasis* markers.
-    const spokenText = speakText(para.text);
-    const renderHash = computeRenderHash(spokenText, voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
+    try {
+        // Stored paragraph text IS the spoken text — cleaned via nSpeech
+        // at import/edit time (see pipeline/build-messages.js). TTS,
+        // alignment, and the freshness hash all operate on this string.
+        const spokenText = para.text;
+        // Unspeakable paragraphs (dividers like '---', punctuation-only)
+        // can never render: nSpeech cleans them to empty and TTS 400s.
+        // Clear any stale render data and skip — never attempt TTS.
+        if (!/[\p{L}\p{N}]/u.test(spokenText || '')) {
+            delete para.audioRef;
+            delete para.audioUrl;
+            delete para.renderHash;
+            delete para.words;
+            delete para.durationMs;
+            delete para.alignComplete;
+            delete para.alignVersion;
+            delete para.alignError;
+            delete para.ttsError;
+            return { rendered: false, aligned: false, skipped: true };
+        }
+        const renderHash = computeRenderHash(spokenText, voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
 
-    // Paragraph is fresh if its stored hash matches current text/voice/speed/engine,
-    // the audio exists in the bucket (and is non-empty), and alignment is at
-    // the current version. `force` bypasses the freshness check — the user
-    // asked for it, do it.
-    const isFresh = para.renderHash === renderHash
-        && para.audioRef
-        && audioExists(para.audioRef)
-        && para.alignVersion === ALIGNMENT_VERSION
-        && para.words?.length > 0;
+        // Paragraph is fresh if its stored hash matches current text/voice/speed/engine,
+        // the audio exists in the bucket (and is non-empty), and alignment is at
+        // the current version. `force` bypasses the freshness check — the user
+        // asked for it, do it.
+        const isFresh = para.renderHash === renderHash
+            && para.audioRef
+            && audioExists(para.audioRef)
+            && para.alignVersion === ALIGNMENT_VERSION
+            && para.words?.length > 0;
 
-    if (isFresh && !options.force) {
-        return { rendered: false, aligned: false };
-    }
+        if (isFresh && !options.force) {
+            return { rendered: false, aligned: false };
+        }
 
-    // Abort early if the render was cancelled.
-    if (signal?.aborted) {
-        return { rendered: false, aligned: false, error: 'Render aborted' };
-    }
+        // Abort early if the render was cancelled.
+        if (signal?.aborted) {
+            return { rendered: false, aligned: false, error: 'Render aborted' };
+        }
 
-    // Clear stale render data for this paragraph. Old audio will be
-    // garbage-collected by gcBuckets() after the render completes.
-    delete para.audioRef;
+        // Clear stale render data for this paragraph. Old audio will be
+        // garbage-collected by gcBuckets() after the render completes.
+        delete para.audioRef;
     delete para.audioUrl;
     delete para.words;
     delete para.durationMs;
@@ -356,7 +371,7 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
                 break;
             }
             try {
-                const alignRes = await alignParagraph(para, msgIdx, paraIdx, { signal });
+                const alignRes = await alignParagraph(para, msgIdx, paraIdx, { signal, spokenText });
                 if (alignRes) {
                     para.words = alignRes.words;
                     para.durationMs = alignRes.durationMs;
@@ -395,6 +410,13 @@ async function renderParagraph(project, msgIdx, paraIdx, nVoiceAvailable, option
     }
 
     return { rendered: true, aligned };
+    } catch (err) {
+        // Catch any unhandled error (cleanText network failure, etc.)
+        // so the worker pool doesn't die silently.
+        console.error(`[v3 Render] msg${msgIdx}/p${paraIdx} unhandled error:`, err.message);
+        para.ttsError = err.message;
+        return { rendered: false, aligned: false, error: err.message };
+    }
 }
 
 function sleep(ms) {
@@ -419,7 +441,7 @@ function computeRenderHash(text, voice, speed, engine) {
     return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
 }
 
-function getSpokenText(slide) {
+async function getSpokenText(slide) {
     let text;
     // topic and end slides speak the narration; everything else (setup,
     // details, conversation) speaks the on-screen text. The narration
@@ -430,10 +452,9 @@ function getSpokenText(slide) {
     } else {
         text = slide.text || slide.narration || '';
     }
-    // Strip *emphasis* markers via the shared speakText() helper.
+    // Clean text via nSpeech — the exact string that will be spoken.
     // On-screen slide.text keeps the marks; only spoken text is cleaned.
-    // Browser-side mirror: stripEmphasisForSpeech in render.js.
-    return speakText(text);
+    return await nspeech.cleanText(getSettings().nspeechUrl, text);
 }
 
 function normalizeAlignedWord(word) {
@@ -478,9 +499,7 @@ app.get('/api/projects', async (req, res) => {
     }
     try {
         const projects = await db.query({}); // Return all
-        console.log("DB QUERY RESULTS:", projects);
-        console.log("IS ARRAY?", Array.isArray(projects));
-        // It is better to return only metadata for the list to save bandwidth if decks are large, but for now we return all.
+        // Return only metadata for the list to save bandwidth if decks are large.
         res.json({ projects });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -703,7 +722,10 @@ app.delete('/api/projects/:id', (req, res) => {
 
 app.post('/api/generate-deck', async (req, res) => {
     const arenaData = req.body;
-    if (!arenaData || !Array.isArray(arenaData.messages)) {
+    // Accept both the canonical Arena export (messages at top level)
+    // and the chat-app export (messages under session.messages).
+    const hasMessages = arenaData && (Array.isArray(arenaData.messages) || Array.isArray(arenaData.session?.messages));
+    if (!hasMessages) {
         return res.status(400).json({ error: 'Invalid Arena export: missing messages array' });
     }
 
@@ -774,7 +796,10 @@ app.post('/api/generate-deck', async (req, res) => {
 // ─── v3 Generate Deck (Paragraph Architecture) ─────────────
 app.post('/api/v3/generate-deck', async (req, res) => {
     const arenaData = req.body;
-    if (!arenaData || !Array.isArray(arenaData.messages)) {
+    // Accept both the canonical Arena export (messages at top level)
+    // and the chat-app export (messages under session.messages).
+    const hasMessages = arenaData && (Array.isArray(arenaData.messages) || Array.isArray(arenaData.session?.messages));
+    if (!hasMessages) {
         return res.status(400).json({ error: 'Invalid Arena export: missing messages array' });
     }
 
@@ -841,12 +866,16 @@ app.post('/api/v3/generate-deck', async (req, res) => {
 // conversation messages, but no LLM-derived text cleaning.
 app.post('/api/v3/import-raw', async (req, res) => {
     const arenaData = req.body;
-    if (!arenaData || !Array.isArray(arenaData.messages)) {
+    // Accept both the canonical Arena export (messages at top level)
+    // and the chat-app export (messages under session.messages).
+    const hasMessages = arenaData && (Array.isArray(arenaData.messages) || Array.isArray(arenaData.session?.messages));
+    if (!hasMessages) {
         return res.status(400).json({ error: 'Invalid Arena export: missing messages array' });
     }
     try {
-        console.log(`[Server] v3 Import (raw): ${arenaData.messages.length} messages`);
-        const project = await buildProject(arenaData, null, null, { skipClean: true });
+        const msgCount = (arenaData.messages || arenaData.session.messages).length;
+        console.log(`[Server] v3 Import (raw): ${msgCount} messages`);
+        const project = await buildProject(arenaData, null, null, { skipClean: true, settings: getSettings() });
         res.json(project);
     } catch (err) {
         console.error('[Server] v3 Import (raw) failed:', err.message);
@@ -965,7 +994,7 @@ app.post('/api/render-deck/:id', async (req, res) => {
 
         for (let i = 0; i < deck.slides.length; i++) {
             const slide = deck.slides[i];
-            const text = getSpokenText(slide);
+            const text = await getSpokenText(slide);
             const role = slide.speaker || 'narrator';
             const voiceConfig = deck.voiceMapping[role] || deck.voiceMapping.narrator || { voice: 'en-US-Male', speed: 1.0 };
             const renderHash = computeRenderHash(text, voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
@@ -1100,6 +1129,11 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
 
         const targets = req.body?.targets;
         const force = req.body?.force === true;
+        // Concurrency picked by the user in the render card; clamp to sane range.
+        const requestedConcurrency = parseInt(req.body?.concurrency, 10);
+        const concurrency = Number.isFinite(requestedConcurrency)
+            ? Math.max(1, Math.min(8, requestedConcurrency))
+            : RENDER_CONCURRENCY;
         const totalParagraphs = project.messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
 
         // Check nVoice availability once up front.
@@ -1124,11 +1158,11 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         }
         const totalToRender = renderTargets.length;
 
-        writeRenderProgress(projectId, 'render', `Starting render (${RENDER_CONCURRENCY} parallel)...`, 0);
+        writeRenderProgress(projectId, 'render', `Starting render (${concurrency} parallel)...`, 0);
 
         const renderStartTime = Date.now();
 
-        // Worker-pool: process up to RENDER_CONCURRENCY paragraphs at once.
+        // Worker-pool: process up to `concurrency` paragraphs at once.
         // Each worker does TTS → align sequentially within its slot.
         let nextTargetIdx = 0;
 
@@ -1179,7 +1213,7 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
 
         // Launch workers and wait for all to finish.
         const workers = [];
-        for (let i = 0; i < Math.min(RENDER_CONCURRENCY, totalToRender); i++) {
+        for (let i = 0; i < Math.min(concurrency, totalToRender); i++) {
             workers.push(renderWorker());
         }
         await Promise.all(workers);
@@ -1303,9 +1337,28 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
         const role = msg.speaker || 'narrator';
         const voiceConfig = doc.voiceMapping?.[role] || doc.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
 
-        // Generate TTS. Hash must be computed from spoken text so it
-        // matches what the browser expects for freshness checks.
-        const spokenText = speakText(para.text);
+        // Stored paragraph text IS the spoken text (cleaned at
+        // import/edit) — the hash is computed from it directly.
+        const spokenText = para.text;
+        // Unspeakable paragraphs (dividers like '---') can never render —
+        // TTS on empty text is a 400. Clear stale render data, persist,
+        // and return the paragraph instead of failing.
+        if (!/[\p{L}\p{N}]/u.test(spokenText || '')) {
+            delete para.audioRef;
+            delete para.audioUrl;
+            delete para.renderHash;
+            delete para.words;
+            delete para.durationMs;
+            delete para.alignComplete;
+            delete para.alignVersion;
+            delete para.alignError;
+            delete para.ttsError;
+            db.update(projectId, {
+                ...doc,
+                updatedAt: Date.now()
+            });
+            return res.json(para);
+        }
         const renderHash = computeRenderHash(spokenText, voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
 
         console.log(`[v3 Render] Re-rendering msg${mi}/p${pi}...`);
@@ -1319,6 +1372,11 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
             });
         } catch (err) {
             return res.status(502).json({ error: err.status ? `TTS failed: HTTP ${err.status}` : `TTS failed: ${err.message}` });
+        }
+        // nSpeech can return 200 with empty audio (e.g. unknown voice id)
+        // — never store it, fail loud like the batch path does.
+        if (!audioBuffer || audioBuffer.length === 0) {
+            return res.status(502).json({ error: `TTS returned empty audio (voice "${voiceConfig.voice}", engine "${voiceConfig.engine || 'nspeech'}")` });
         }
         const { audioRef, audioUrl, byteLength } = storeAudio(
             `msg_${mi}_p_${pi}_${renderHash}.mp3`, audioBuffer
@@ -1343,18 +1401,25 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
 
         if (nVoiceAvailable) {
             try {
-                const alignRes = await alignParagraph(para, mi, pi);
+                const alignRes = await alignParagraph(para, mi, pi, { spokenText });
                 if (alignRes) {
                     para.words = alignRes.words;
                     para.durationMs = alignRes.durationMs;
                     para.alignComplete = alignRes.alignComplete;
                     para.alignVersion = ALIGNMENT_VERSION;
                     console.log(`[v3 Render] msg${mi}/p${pi}: aligned ${alignRes.words.length} words`);
+                } else {
+                    // alignParagraph returns null only when preconditions
+                    // aren't met (no spoken text / no audio) — surface it,
+                    // never leave an untracked unaligned paragraph.
+                    para.alignError = 'Alignment skipped';
                 }
             } catch (err) {
                 console.error(`[v3 Render] msg${mi}/p${pi} alignment failed:`, err.message);
                 para.alignError = err.message;
             }
+        } else {
+            para.alignError = 'nVoice unavailable';
         }
 
         // Update nDB
@@ -1368,6 +1433,22 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
     } catch (err) {
         console.error('[Server] v3 render-paragraph failed:', err.message);
         res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── v3 Text Clean (proxy to nSpeech) ────────────────────────
+// Browser-facing proxy for nSpeech /v1/text/clean — CSP default-src
+// 'self' blocks direct browser→nSpeech calls. The editor uses this to
+// re-clean edited paragraph text, keeping the stored text = spoken text
+// contract intact.
+app.post('/api/v3/clean-text', async (req, res) => {
+    try {
+        const text = String(req.body?.text ?? '');
+        const cleaned = await nspeech.cleanText(getSettings().nspeechUrl, text);
+        res.json({ text: cleaned });
+    } catch (err) {
+        console.error('[Server] v3 clean-text failed:', err.message);
+        res.status(502).json({ error: err.message });
     }
 });
 
@@ -1404,7 +1485,7 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
         }
 
         const slide = deck.slides[slideIdx];
-        const text = getSpokenText(slide);
+        const text = await getSpokenText(slide);
         const role = slide.speaker || 'narrator';
         const voiceConfig = deck.voiceMapping[role] || deck.voiceMapping.narrator || { voice: 'en-US-Male', speed: 1.0 };
         const renderHash = computeRenderHash(text, voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
@@ -1484,7 +1565,7 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
 });
 
 async function alignSingleSlide(slide, slideIndex) {
-    const text = getSpokenText(slide);
+    const text = await getSpokenText(slide);
     if (!text.trim()) return null;
     if (!slide.tts || !slide.tts.audioRef) return null;
 
@@ -1494,7 +1575,7 @@ async function alignSingleSlide(slide, slideIndex) {
     const timeout = setTimeout(() => controller.abort(), 60000);
 
     try {
-        const data = await nvoice.align(getSettings().nvoiceUrl, {
+        const data = await nvoice.align(getSettings().nspeechUrl, {
             audioBuffer,
             text,
             signal: controller.signal
@@ -1555,14 +1636,10 @@ async function alignSingleSlide(slide, slideIndex) {
 }
 
 async function alignParagraph(paragraph, msgIdx, paraIdx, options = {}) {
-    const text = paragraph.text;
-    if (!text || !text.trim()) return null;
+    const { spokenText } = options;
+    if (!spokenText || !spokenText.trim()) return null;
     if (!paragraph.audioRef || !audioExists(paragraph.audioRef)) return null;
 
-    // Use the same spoken-text normalization as TTS so alignment is asked
-    // to match exactly what was synthesized. This must stay in sync with
-    // speakText() in pipeline/speak-text.js.
-    const spokenText = speakText(text);
     const audioBuffer = readAudio(paragraph.audioRef);
 
     const controller = new AbortController();
@@ -1574,7 +1651,7 @@ async function alignParagraph(paragraph, msgIdx, paraIdx, options = {}) {
     }
 
     try {
-        const data = await nvoice.align(getSettings().nvoiceUrl, {
+        const data = await nspeech.align(getSettings().nspeechUrl, {
             audioBuffer,
             text: spokenText,
             signal: controller.signal
@@ -1621,9 +1698,9 @@ app.post('/api/tts-preview', async (req, res) => {
         const { text, voice, speed, engine } = req.body;
         if (!text) return res.status(400).json({ error: 'Missing text' });
 
-        // Strip *emphasis* markers via the shared speakText() helper so
-        // the preview matches what the deck's rendered TTS will say.
-        const spokenText = speakText(text);
+        // Clean text via nSpeech so the preview matches what the deck's
+        // rendered TTS will say.
+        const spokenText = await nspeech.cleanText(getSettings().nspeechUrl, text);
         const audioBuffer = await nspeech.tts(getSettings().nspeechUrl, {
             text: spokenText,
             voice: voice || 'en-US-Male',

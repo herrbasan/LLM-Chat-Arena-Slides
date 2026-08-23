@@ -1,5 +1,5 @@
 // pipeline/align.js
-// TTS Audio + Text → Word Timings via nVoice
+// TTS Audio + Text → Word Timings via nSpeech forced alignment
 //
 // Supports two input formats:
 //   v2 (deck with slides): aligns each slide's audio
@@ -13,37 +13,37 @@ const path = require('path');
 
 // ─── Config ───────────────────────────────────────────────────
 
-// nVoice V3 (see reference/nVoice_API.md). Alignment is
+// nSpeech V3 (see reference/nSpeech_API.md). Alignment is
 // POST /v1/audio/align (multipart: file + text) → { text, duration, words[] }.
-// Both services live on BADKID over plain HTTP.
-const NVOICE_URL = process.env.NVOICE_URL || 'http://192.168.0.100:2244';
+const NSPEECH_URL = process.env.NSPEECH_URL || 'http://192.168.0.100:2233';
 const ALIGNMENT_VERSION = 7;
 
 // ─── Helpers ──────────────────────────────────────────────────
 
-// nVoice V3 align. Returns { text, duration, words: [{word, start, end, ...}] }.
+// nSpeech V3 forced alignment. Text-constrained: word count in === word count out.
+// Returns { text, duration, words: [{word, start, end, probability}] }.
 // Throws on HTTP error or empty word list — fail loud.
 async function fetchAlign(audioBuffer, text) {
     const form = new FormData();
     form.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), 'audio.mp3');
     form.append('text', text);
 
-    const response = await fetch(`${NVOICE_URL}/v1/audio/align`, {
+    const response = await fetch(`${NSPEECH_URL}/v1/audio/align`, {
         method: 'POST',
         body: form
     });
     if (!response.ok) {
         const body = await response.text().catch(() => '');
-        throw new Error(`nVoice align HTTP ${response.status}: ${body.slice(0, 200)}`);
+        throw new Error(`nSpeech align HTTP ${response.status}: ${body.slice(0, 200)}`);
     }
     const data = await response.json();
     if (!Array.isArray(data.words) || data.words.length === 0) {
-        throw new Error('nVoice align returned no words');
+        throw new Error('nSpeech align returned no words');
     }
     return data;
 }
 
-const { speakText } = require('./speak-text.js');
+const nspeech = require('../server/nspeech.js');
 
 function getSlideText(slide) {
     let text;
@@ -52,13 +52,8 @@ function getSlideText(slide) {
     } else {
         text = slide.text || slide.narration || '';
     }
-    // Strip *emphasis* markers via the shared speakText() helper. nVoice
-    // alignment uses this as endpoint context.
-    return speakText(text);
-}
-
-function getSpokenText(text) {
-    return speakText(text);
+    // Clean text via nSpeech — the exact string that will be spoken.
+    return nspeech.cleanText(NSPEECH_URL, text);
 }
 
 function normalizeWord(w) {
@@ -292,8 +287,10 @@ function alignWordsToSource(sourceText, sttWords, audioDurationMs) {
 // ─── v3: Paragraph-level Alignment ────────────────────────────
 
 async function alignParagraph(paragraph, msgIdx, paraIdx) {
-    const text = getSpokenText(paragraph.text);
-    if (!text || text.trim().length === 0) return null;
+    // Stored paragraph text IS the spoken text (cleaned at import) —
+    // alignment constrains to it directly, no re-cleaning.
+    const text = paragraph.text;
+    if (!/[\p{L}\p{N}]/u.test(text || '')) return null;
 
     if (!paragraph.audioPath) return null;
 

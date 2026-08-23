@@ -8,16 +8,21 @@
 // TTS and alignment operate on. No slides are stored; slide layout is
 // computed at runtime by the browser.
 //
-// Before splitting into paragraphs, message text is cleaned via
-// pipeline/clean.js (LLM gateway call per message) to remove client-side
-// noise, stage directions, and other artifacts.
-// Pass { skipClean: true } to bypass this (e.g. for quick reimports).
+// Text cleaning happens in two stages:
+//   1. pipeline/clean.js (LLM gateway call per message) — content-level
+//      cleanup: client noise, stage directions, other artifacts.
+//      Pass { skipClean: true } to bypass (e.g. for quick reimports).
+//   2. nSpeech /v1/text/clean per message, BEFORE splitting — this makes
+//      the stored paragraph text the exact string TTS will speak and
+//      alignment will constrain to. Render never re-cleans. Unspeakable
+//      paragraphs (dividers like '---' clean to empty) are dropped here.
 
 const fs = require('fs');
 const path = require('path');
 const { cleanAllMessages } = require('./clean.js');
 const { parseArenaExport } = require('./importer.js');
 const { buildOpeningSlides, buildEndSlide } = require('./build-deck.js');
+const nspeech = require('../server/nspeech.js');
 
 // ─── Voice config ─────────────────────────────────────────────
 
@@ -65,22 +70,35 @@ function resolveRoles(participants) {
 
 // ─── Message building ─────────────────────────────────────────
 
-function buildMessages(source, progress) {
+async function buildMessages(source, progress, nspeechUrl) {
     const roleFor = resolveRoles(source.participants.filter(Boolean));
 
-    progress('messages', `Splitting ${source.messages.length} messages into paragraphs…`, 30);
+    progress('messages', `Cleaning + splitting ${source.messages.length} messages into paragraphs…`, 30);
 
-    const messages = source.messages.map((m, idx) => {
-        const text = m.content || '';
+    const messages = [];
+    for (let idx = 0; idx < source.messages.length; idx++) {
+        const m = source.messages[idx];
         const { role, label } = roleFor(m.speaker);
-        const paragraphs = splitIntoParagraphs(text);
+
+        // Strip chat-client prefixes ("[minimax-chat · 21:37:11]:") — a
+        // fixed export artifact, removed deterministically.
+        const rawText = String(m.content || '').replace(/^\s*\[[^\]\n]*·\s*\d{1,2}:\d{2}(?::\d{2})?\]:\s*/, '');
+
+        // nSpeech clean BEFORE the split — the stored paragraph text is
+        // the exact string TTS speaks and alignment constrains to.
+        // Render hashes this text directly and never re-cleans.
+        const cleanedText = await nspeech.cleanText(nspeechUrl, rawText);
+        const paragraphs = splitIntoParagraphs(cleanedText)
+            // Drop paragraphs with nothing speakable (e.g. '---' dividers
+            // clean to empty): they can never be rendered or aligned.
+            .filter(p => /[\p{L}\p{N}]/u.test(p));
 
         if (paragraphs.length === 0) {
-            console.warn(`  [Message ${idx}] Empty message from ${m.speaker} — skipping`);
-            return null;
+            console.warn(`  [Message ${idx}] Nothing speakable from ${m.speaker} — skipping`);
+            continue;
         }
 
-        return {
+        messages.push({
             speaker: role,
             label: label,
             role: m.role || 'assistant',
@@ -88,8 +106,8 @@ function buildMessages(source, progress) {
             createdAt: m.createdAt || null,
             originalSpeaker: m.speaker,
             paragraphs: paragraphs.map(p => ({ text: p }))
-        };
-    }).filter(Boolean);
+        });
+    }
 
     const totalParagraphs = messages.reduce((sum, m) => sum + m.paragraphs.length, 0);
     progress('messages', `Built ${messages.length} messages with ${totalParagraphs} paragraphs`, 70);
@@ -140,6 +158,10 @@ async function buildProject(sourceData, outputDir = null, progress = () => {}, o
         console.warn('[Build Messages] WARNING: source.seedPrompt is empty — topic will fall back to summary title.');
     }
 
+    // nSpeech clean-before-split needs the nSpeech base URL. The server
+    // passes it via options.settings; the CLI falls back to env/default.
+    const nspeechUrl = options.settings?.nspeechUrl || process.env.NSPEECH_URL || 'http://192.168.0.100:2233';
+
     // ── Step 1: Clean message text via LLM ─────────────────────
     const skipClean = options.skipClean === true || options.useLLM === false;
     if (!skipClean) {
@@ -154,9 +176,9 @@ async function buildProject(sourceData, outputDir = null, progress = () => {}, o
         progress('clean', 'Skipping LLM text cleaning (--skip-clean)', 20);
     }
 
-    // ── Step 2: Split messages into paragraphs ─────────────────
+    // ── Step 2: nSpeech clean + split messages into paragraphs ──
     progress('messages', `Splitting messages into paragraphs…`, 25);
-    const conversationMessages = buildMessages(source, progress);
+    const conversationMessages = await buildMessages(source, progress, nspeechUrl);
 
     // Tag conversation messages with their stable conversation index
     // so virtual-slide headers keep 1-based numbering regardless of
@@ -184,6 +206,9 @@ async function buildProject(sourceData, outputDir = null, progress = () => {}, o
             createdAt: null,
             originalSpeaker: 'narrator',
             meta: slide.meta || null,
+            // Opening/end narration is deterministic, already-speakable
+            // text — deliberately NOT nSpeech-cleaned, so the topic slide
+            // keeps the human's verbatim wording and punctuation.
             paragraphs: splitIntoParagraphs(narration).map(p => ({ text: p }))
         };
     }

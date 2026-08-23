@@ -15,6 +15,17 @@
                         <button type="button" id="btn-stop">Stop</button>
                     </nui-button>
                 </div>
+                <div class="render-concurrency-row" title="Local engines serialize on the ONNX lock — use 1. Cloud engines benefit from parallelism.">
+                    <label for="render-concurrency">Parallel renders</label>
+                    <nui-select id="render-concurrency-wrap">
+                        <select id="render-concurrency">
+                            <option value="1" selected>1 (local)</option>
+                            <option value="2">2</option>
+                            <option value="4">4 (cloud)</option>
+                            <option value="8">8</option>
+                        </select>
+                    </nui-select>
+                </div>
                 <div id="render-status" class="render-status-row">
                     <p class="render-status-hint">Click Render to generate audio.</p>
                 </div>

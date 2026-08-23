@@ -383,15 +383,16 @@ nui.registerPage('render', {
         }
 
         // Single source of truth for paragraph freshness.
-        // Matches the server's renderParagraph freshness check as closely
-        // as the browser can: hash from spoken text, audio present, words
-        // present. Anything with audio/hash but not fresh is stale.
+        // Stored paragraph text IS the spoken text (cleaned via nSpeech
+        // at import/edit time) — the browser hashes it directly, exactly
+        // like the server. Paragraphs with nothing speakable (dividers
+        // like '---') can never render and don't count at all.
         function computeParagraphStatus(para, voiceConfig) {
-            if (!para.text || para.text.trim() === '' || para.text.trim() === '...') return 'skip';
+            if (!para.text || !/[\p{L}\p{N}]/u.test(para.text)) return 'skip';
             const hasAudio = !!(para.audioRef || para.audioUrl);
             const hasHash = !!para.renderHash;
             if (!hasAudio && !hasHash) return 'unrendered';
-            const expectedHash = computeRenderHash(stripEmphasisForSpeech(para.text), voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
+            const expectedHash = computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
             const isFresh = para.renderHash === expectedHash && hasAudio && (para.words?.length || 0) > 0;
             return isFresh ? 'fresh' : 'stale';
         }
@@ -402,7 +403,7 @@ nui.registerPage('render', {
         function getParagraphStatusHint(paragraphs, voiceConfig) {
             if (!paragraphs) return '';
             for (const para of paragraphs) {
-                if (!para.text || para.text.trim() === '' || para.text.trim() === '...') continue;
+                if (!para.text || !/[\p{L}\p{N}]/u.test(para.text)) continue;
                 const status = computeParagraphStatus(para, voiceConfig);
                 if (status === 'stale') {
                     if (para.ttsError) return `TTS failed: ${para.ttsError}`;
@@ -442,18 +443,6 @@ nui.registerPage('render', {
             const expectedHash = computeRenderHash(text, roleCfg.voice, roleCfg.speed, roleCfg.engine);
             if (slide.tts.renderHash === expectedHash) return 'fresh';
             return 'stale';
-        }
-
-        // Browser-side mirror of pipeline/speak-text.js speakText().
-        // Rewrites *content* → (content) for natural parenthetical
-        // cadence (action beats like *pauses*, *stays*), then strips
-        // any stray asterisks. nSpeech would otherwise speak "asterisk"
-        // literally. On-screen slide.text keeps the marks. Keep in sync
-        // with the canonical server-side helper.
-        function stripEmphasisForSpeech(s) {
-            return String(s || '')
-                .replace(/\*+([^*]+?)\*+/g, '($1)')
-                .replace(/\*+/g, '');
         }
 
         // ─── Per-slide-type style configuration ─────────────────────
@@ -970,7 +959,7 @@ nui.registerPage('render', {
             const msgIdx = idx;
             const paragraphs = [];
             (msg.paragraphs || []).forEach((p, pi) => {
-                if (p.text && p.text.trim() && p.text.trim() !== '...') {
+                if (p.text && /[\p{L}\p{N}]/u.test(p.text)) {
                     paragraphs.push({ paraIdx: pi, para: p });
                 }
             });
@@ -1048,7 +1037,7 @@ nui.registerPage('render', {
             }
             const slide = deck.slides?.[slideIdx];
             if (!slide || !slide._paragraphs) return;
-            const paragraphs = slide._paragraphs.filter(p => p.text && p.text.trim() && p.text.trim() !== '...');
+            const paragraphs = slide._paragraphs.filter(p => p.text && /[\p{L}\p{N}]/u.test(p.text));
             if (paragraphs.length === 0) return;
 
             // Mark both the slide and the source message as rendering so
@@ -1261,10 +1250,11 @@ nui.registerPage('render', {
                 // Poll every second; server writes progress file every few paragraphs
                 pollTimer = setInterval(pollProgress, 1000);
 
+                const concurrency = parseInt(element.querySelector('#render-concurrency')?.value || '1', 10);
                 const res = await fetch(`/api/v3/render-deck/${projectId}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ...deck, force })
+                    body: JSON.stringify({ ...deck, force, concurrency })
                 });
 
                 clearInterval(pollTimer);

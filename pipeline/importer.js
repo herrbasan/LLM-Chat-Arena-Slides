@@ -17,9 +17,100 @@
 const fs = require('fs');
 const path = require('path');
 
+// Parse the chat-app export shape and return the same source object
+// that parseArenaExport would have produced for a canonical Arena export.
+// The chat export has `messages` at the top level (same as canonical)
+// but all metadata is under `session.*` (id, summary, arenaConfig).
+// It does NOT preserve per-message timestamps, and the `model` field
+// per message is unreliable across recording modes (sometimes null,
+// sometimes swapped with `speaker`, sometimes a truncated label).
+// We trust `speaker` as the per-message identity.
+function parseChatExport(arenaData) {
+    const session = arenaData.session;
+    const config = session.arenaConfig || {};
+    const messages = arenaData.messages;
+
+    // exportedAt: session.id encodes the session timestamp. The chat
+    // app uses either "arena-<ms>-<rand>" (its own session id) or
+    // "chat_<ms>_<rand>" (canonical Arena export id). Both encode a
+    // millisecond timestamp as the second component. Falls back to
+    // "now" if the pattern doesn't match — e.g. chat-id-only files
+    // without a timestamp prefix.
+    const idMs = (session.id || '').match(/^(?:arena-|chat_)(\d+)/);
+    const exportedAt = idMs
+        ? new Date(parseInt(idMs[1], 10)).toISOString()
+        : new Date().toISOString();
+
+    // participants: from arenaConfig.modelA + modelB. Hard-filter
+    // `moderator` even though the chat export doesn't put it there.
+    const participants = [config.modelA, config.modelB]
+        .filter(Boolean)
+        .filter(p => p.toLowerCase() !== 'moderator');
+
+    // Locate the moderator. The first message is normally the seed
+    // prompt, but chat-exported sessions allow the moderator to
+    // interject mid-conversation. We take the first moderator message
+    // as the seed prompt and strip ALL moderator messages from the
+    // conversation (the renderer never sees them).
+    const moderatorIndices = [];
+    let firstModerator = null;
+    for (let i = 0; i < messages.length; i++) {
+        if ((messages[i].speaker || '').toLowerCase() === 'moderator') {
+            moderatorIndices.push(i);
+            if (firstModerator === null) firstModerator = messages[i];
+        }
+    }
+    const moderatorMessage = firstModerator;
+    const seedPrompt = moderatorMessage
+        ? (moderatorMessage.content || '').replace(/^\s*Topic:\s*/i, '').trim()
+        : null;
+
+    // Strip  blocks (kimi-cli-chat / kimi-chat sessions leak the
+    // model's reasoning trace into the recorded content). Drop empty
+    // messages defensively. createdAt is null for every message because
+    // the chat export doesn't preserve per-message timestamps.
+    const modSet = new Set(moderatorIndices);
+    const cleaned = messages
+        .filter((_, i) => !modSet.has(i))
+        .map(m => {
+            const content = (m.content || '')
+                .replace(/<think[\s\S]*?<\/think>/g, '')
+                .trim();
+            return {
+                speaker: m.speaker || 'Unknown',
+                role: m.role || 'assistant',
+                content: content,
+                createdAt: null,
+                model: null
+            };
+        })
+        .filter(m => m.content.length > 0);
+
+
+
+    return {
+        id: session.id || 'unknown',
+        exportedAt: exportedAt,
+        topic: (session.summary && session.summary.title) || 'Untitled Conversation',
+        seedPrompt: seedPrompt,
+        seedPromptRaw: moderatorMessage ? (moderatorMessage.content || '').trim() : null,
+        participants: participants,
+        messages: cleaned,
+        renderedAt: exportedAt
+    };
+}
+
 function parseArenaExport(arenaData) {
     if (!arenaData || !Array.isArray(arenaData.messages)) {
         throw new Error('Invalid Arena export: missing messages array');
+    }
+
+    // Chat-export shape: { messages: [...], session: { id, summary,
+    // arenaConfig, ... } }. The chat app stores metadata under session.*
+    // and the messages at the top level. Detect by the presence of
+    // `session` and hoist.
+    if (arenaData.session) {
+        return parseChatExport(arenaData);
     }
 
     // Idempotent guard: if the input is ALREADY a parsed source object

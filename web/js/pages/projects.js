@@ -165,7 +165,13 @@ nui.registerPage('projects', {
                 const text = await file.text();
                 const json = JSON.parse(text);
 
-                if (!json.messages || !(json.id || json.chatInfo?.id)) {
+                // Accept both the canonical Arena export (messages at top
+                // level, id at top level or in chatInfo) and the chat-app
+                // export (messages at top level, id and metadata under
+                // session.*). The server's importer hoists both shapes.
+                const hasMessages = Array.isArray(json.messages) || Array.isArray(json.session?.messages);
+                const hasId = json.id || json.chatInfo?.id || json.session?.id;
+                if (!hasMessages || !hasId) {
                     throw new Error('Invalid Arena Export format');
                 }
 

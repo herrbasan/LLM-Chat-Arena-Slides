@@ -18,13 +18,7 @@ const NSPEECH_URL = process.env.NSPEECH_URL || 'http://192.168.0.100:2233';
 
 // ─── Helpers ──────────────────────────────────────────────────
 
-const { speakText } = require('./speak-text.js');
-
-function getSpokenText(text) {
-    // Delegates to the shared speakText() helper. Single source of truth
-    // for *emphasis* stripping across server + pipeline.
-    return speakText(text);
-}
+const nspeech = require('../server/nspeech.js');
 
 function getVoiceConfig(role, voiceMapping) {
     const config = voiceMapping[role] || voiceMapping.narrator;
@@ -36,7 +30,10 @@ function getVoiceConfig(role, voiceMapping) {
 
 // nSpeech V3 TTS. Batch mode (render full audio before first byte) — the
 // CLI consumes the whole file anyway. Returns a Buffer of MP3 bytes.
-async function fetchTts(text, voiceConfig) {
+// markdown: true is unconditional — server-side cleaning normalizes prose
+// for speech (acronyms, colons, dashes), not just markdown.
+// chunkOpts (optional): pass-through for long-form chunking — see server/nspeech.js.
+async function fetchTts(text, voiceConfig, chunkOpts = {}) {
     const response = await fetch(`${NSPEECH_URL}/v1/audio/speech`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -46,7 +43,7 @@ async function fetchTts(text, voiceConfig) {
             voice: voiceConfig.voice,
             speed: voiceConfig.speed || 1.0,
             response_format: 'mp3',
-            extra_body: { batch: true }
+            extra_body: { batch: true, markdown: true, ...chunkOpts }
         })
     });
     if (!response.ok) {
@@ -72,9 +69,11 @@ function computeRenderHash(text, voice, speed, engine) {
 // ─── v3: Paragraph-level TTS ──────────────────────────────────
 
 async function generateTtsForParagraph(text, voiceConfig, audioDir, msgIdx, paraIdx) {
-    const spokenText = getSpokenText(text);
-    if (!spokenText || spokenText.trim().length === 0) {
-        console.log(`  [Msg ${msgIdx} Para ${paraIdx}] Skipping — no text to speak`);
+    // Stored paragraph text IS the spoken text — cleaned via nSpeech at
+    // import time (see build-messages.js). No re-cleaning here.
+    const spokenText = text;
+    if (!/[\p{L}\p{N}]/u.test(spokenText || '')) {
+        console.log(`  [Msg ${msgIdx} Para ${paraIdx}] Skipping — nothing speakable`);
         return null;
     }
 
@@ -99,7 +98,9 @@ async function generateTtsForParagraph(text, voiceConfig, audioDir, msgIdx, para
 
     console.log(`  [Msg ${msgIdx} Para ${paraIdx}] "${spokenText.substring(0, 60)}${spokenText.length > 60 ? '...' : ''}"`);
 
-    const audioBuffer = await fetchTts(spokenText, voiceConfig);
+    // markdown: false — the text is already cleaned; a second clean pass
+    // would diverge from the string alignment constrains to.
+    const audioBuffer = await fetchTts(spokenText, voiceConfig, { markdown: false });
     if (audioBuffer.length === 0) {
         throw new Error(`nSpeech TTS returned empty audio for msg ${msgIdx} para ${paraIdx}`);
     }
@@ -165,16 +166,12 @@ async function processProject(project, outputDir) {
 
 // ─── v2: Slide-level TTS (legacy) ─────────────────────────────
 
-function getSlideText(slide) {
+async function generateTtsForSlide(slide, voiceMapping, outputDir, slideIndex) {
     const text = (slide.type === 'topic' || slide.type === 'end')
         ? (slide.narration || slide.text || '')
         : (slide.text || slide.narration || '');
-    return getSpokenText(text);
-}
-
-async function generateTtsForSlide(slide, voiceMapping, outputDir, slideIndex) {
-    const text = getSlideText(slide);
-    if (!text || text.trim().length === 0) {
+    const spokenText = await nspeech.cleanText(NSPEECH_URL, text);
+    if (!spokenText || spokenText.trim().length === 0) {
         console.log(`  [Slide ${slideIndex}] Skipping — no text to speak`);
         return null;
     }

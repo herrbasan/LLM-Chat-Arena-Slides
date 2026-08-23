@@ -559,7 +559,33 @@ nui.registerPage('editor', {
             // Strip out any paragraphs the user emptied — easier than
             // asking them to hit a delete button. An empty paragraph
             // produces 0-byte audio and breaks alignment anyway.
-            const cleaned = working.map(p => p.text).filter(t => t && t.trim().length > 0);
+            const edited = working.map(p => p.text).filter(t => t && t.trim().length > 0);
+            // Stored paragraph text IS the spoken text (render never
+            // re-cleans), so edits go through nSpeech's cleaner first —
+            // same contract as import. Results with nothing speakable
+            // (e.g. a '---' divider the user typed) keep their raw text;
+            // render and status skip them via the same speakability test.
+            let cleaned;
+            try {
+                cleaned = [];
+                for (const t of edited) {
+                    const r = await fetch('/api/v3/clean-text', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: t })
+                    });
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    const { text: cleanedText } = await r.json();
+                    cleaned.push(/[\p{L}\p{N}]/u.test(cleanedText) ? cleanedText : t);
+                }
+            } catch (err) {
+                nui.components.banner.show({
+                    content: `Text cleanup failed (${err.message}) — message not saved.`,
+                    priority: 'alert',
+                    autoClose: 5000
+                });
+                return;
+            }
             if (cleaned.length === 0) {
                 nui.components.banner.show({
                     content: 'All paragraphs are empty — discarding message.',
@@ -1016,19 +1042,11 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
         });
 
         // ─── TTS Preview ──────────────────────────────────────
-        // Goes through the server proxy (/api/tts-preview) — the browser
-        // never talks to nSpeech directly. One V3 client (server-side),
-        // no CORS/CSP surface. Clicking the same button again stops
-        // playback and restores the volume icon.
+        // Server proxy cleans text via nSpeech before speaking — the
+        // exact same cleaning the render pipeline uses. Browser sends
+        // raw text; no local manipulation.
         let previewAudio = null;
         let previewButton = null;
-
-        // Browser-side mirror of pipeline/speak-text.js speakText().
-        function speakText(s) {
-            return String(s || '')
-                .replace(/\*+([^*]+?)\*+/g, '($1)')
-                .replace(/\*+/g, '');
-        }
 
         function resetPreviewButton() {
             if (previewButton) {
@@ -1053,7 +1071,7 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
                 const res = await fetch('/api/tts-preview', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: speakText(text), voice: voice || '', speed: speed || 1.0, engine: engine || undefined })
+                    body: JSON.stringify({ text, voice: voice || '', speed: speed || 1.0, engine: engine || undefined })
                 });
                 if (!res.ok) {
                     const data = await res.json().catch(() => ({}));

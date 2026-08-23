@@ -859,6 +859,18 @@ nui-dialog[mode="page"] .options-source {
     gap: var(--nui-space-half);
 }
 
+.render-concurrency-row {
+    display: flex;
+    align-items: center;
+    gap: var(--nui-space-half);
+    margin-top: var(--nui-space-half);
+}
+
+.render-concurrency-row label {
+    color: var(--text-color-dim);
+    white-space: nowrap;
+}
+
 .render-status-card h3 {
     margin: 0;
     font-size: var(--font-size-medium);

@@ -1,15 +1,10 @@
 // server/nvoice.js
-// nVoice V3 client — the ONLY place in this project that knows the V3
-// wire format. Everything else calls these helpers.
+// Alignment client — historically nVoice, now nSpeech's forced alignment.
+// The module name is kept to avoid changing 30+ call sites.
 //
-// V3 surface used here (see reference/nVoice_API.md):
-//   POST /v1/audio/align — multipart: file + text → { text, duration, words[] }
-//   GET  /health         — { status, version, engine }
-//
-// NOTE: /v1/audio/align returns a FLAT word list (no segments[]). The old
-// /transcribe-style segment structure is gone. Guardrail G5: the supplied
-// text is NOT used as initial_prompt — the worker transcribes with word
-// timestamps and the caller consumes them directly.
+// nSpeech /v1/audio/align (torchaudio MMS_FA) is text-constrained forced
+// alignment: word count in === word count out, no hallucination, no drops.
+// Accepts MP3 directly (ffmpeg-decoded server-side).
 
 async function align(baseUrl, { audioBuffer, text, filename = 'audio.mp3', signal }) {
     const form = new FormData();
@@ -23,15 +18,15 @@ async function align(baseUrl, { audioBuffer, text, filename = 'audio.mp3', signa
     });
     if (!res.ok) {
         const body = await res.text().catch(() => '');
-        const err = new Error(`nVoice align HTTP ${res.status}: ${body.slice(0, 200)}`);
+        const err = new Error(`nSpeech align HTTP ${res.status}: ${body.slice(0, 200)}`);
         err.status = res.status;
         throw err;
     }
     const data = await res.json();
     if (!Array.isArray(data.words) || data.words.length === 0) {
-        throw new Error('nVoice align returned no words');
+        throw new Error('nSpeech align returned no words');
     }
-    return data; // { text, duration, words: [{ word, start, end, probability? }] }
+    return data; // { text, duration, words: [{ word, start, end, probability }] }
 }
 
 async function health(baseUrl) {

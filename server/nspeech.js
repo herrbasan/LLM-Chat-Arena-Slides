@@ -13,9 +13,9 @@
 // Old local engine names (kokoro, dots, ...) are REJECTED by V3 — never
 // pass them as `model`.
 
-// Batch mode: render the full audio before the first byte. For slideshow
-// rendering we always want this — the file is consumed whole anyway, and
-// progressive streaming only adds failure surface.
+// TTS: generate audio from PRE-CLEANED text. The caller must run
+// cleanText() first and pass the result here. No server-side cleaning
+// flag is sent — the text is already what the engine will speak.
 async function tts(baseUrl, { text, voice, speed = 1.0, engine = 'nspeech', signal }) {
     const res = await fetch(`${baseUrl}/v1/audio/speech`, {
         method: 'POST',
@@ -25,8 +25,7 @@ async function tts(baseUrl, { text, voice, speed = 1.0, engine = 'nspeech', sign
             input: text,
             voice,
             speed,
-            response_format: 'mp3',
-            extra_body: { batch: true }
+            response_format: 'mp3'
         }),
         signal
     });
@@ -58,4 +57,45 @@ async function health(baseUrl) {
     return res.json(); // { status: "ok", version, engine }
 }
 
-module.exports = { tts, listVoices, listEngines, health };
+module.exports = { cleanText, tts, align, listVoices, listEngines, health };
+
+// Clean text via nSpeech. Returns the exact string that will be spoken.
+// This is the ONLY normalization the backend performs — no local speakText.
+async function cleanText(baseUrl, text) {
+    const res = await fetch(`${baseUrl}/v1/text/clean`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+    });
+    if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`nSpeech /v1/text/clean HTTP ${res.status}: ${body.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    return data.text;
+}
+
+// Forced alignment via nSpeech (torchaudio MMS_FA). Text-constrained:
+// word count in === word count out. Accepts MP3 directly.
+async function align(baseUrl, { audioBuffer, text, filename = 'audio.mp3', signal }) {
+    const form = new FormData();
+    form.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), filename);
+    form.append('text', text);
+
+    const res = await fetch(`${baseUrl}/v1/audio/align`, {
+        method: 'POST',
+        body: form,
+        signal
+    });
+    if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        const err = new Error(`nSpeech align HTTP ${res.status}: ${body.slice(0, 200)}`);
+        err.status = res.status;
+        throw err;
+    }
+    const data = await res.json();
+    if (!Array.isArray(data.words) || data.words.length === 0) {
+        throw new Error('nSpeech align returned no words');
+    }
+    return data; // { text, duration, words: [{ word, start, end, probability }] }
+}

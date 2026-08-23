@@ -121,6 +121,13 @@ Multiple `memory.store` calls per topic are expected — store aggressively. Pre
 
 ## Verified Project State — 2026-06-21
 
+### Clean-Before-Split Pipeline — 2026-08-23
+- **Import:** nSpeech `/v1/text/clean` runs per message BEFORE paragraph splitting (`pipeline/build-messages.js`); the stored paragraph text is the exact spoken text. Chat-client prefixes (`[name · HH:MM:SS]:`) are stripped by regex at import. Unspeakable paragraphs (`---` dividers, punctuation-only) are dropped at import.
+- **Render:** never re-cleans. Server and browser both hash `paragraph.text` directly — there is no second cleaner in the freshness check.
+- **Editor:** edited paragraphs are re-cleaned via `POST /api/v3/clean-text` (nSpeech proxy) before save.
+- **Skip contract:** paragraphs failing `/[\p{L}\p{N}]/u` are skipped everywhere — status `skip`, render clears stale render fields and never calls TTS (nSpeech 400s on empty text). Single-paragraph endpoint fails loud (502) on empty TTS audio; alignment gaps always record `alignError` (no silent unaligned state).
+- Verified e2e 2026-08-23: synthetic dirty source, reference export import, live render (audio + alignment + hash match), unspeakable skip. nSpeech gotcha filed as herrbasan/nSpeech#1: TTS returns 200 + empty audio for unknown voice ids.
+
 ### Architecture
 - **Deck version:** 3 (`deck.version === 3`). v3 projects store `messages[]` with `paragraphs[]`; virtual slides are built at runtime in `web/js/pages/render.js` (~600 chars per visual chunk).
 - **Slide type contract:** `setup → details → topic → [conversation...] → end`. The type `title` was renamed to `topic` on 2026-06-10; no `title` type remains in the active flow.
@@ -179,12 +186,13 @@ Multiple `memory.store` calls per topic are expected — store aggressively. Pre
 - **nVoice:** Produces speech-to-text segments and word timestamps via `NVOICE_URL`. Current local development uses **HTTP** `http://192.168.0.100:2244` (HTTPS with self-signed cert stopped working with Node v24's `fetch`; the HTTP endpoint was added to nVoice on 2026-06-20).
 - **nDB:** Project persistence is append-style JSONL through `modules/nDB`; do not hand-edit database records unless there is no API path.
 
-### Spoken Text Contract
+### Spoken Text Contract (clean-before-split, 2026-08-23)
 
-- Use `getSpokenText(slide)` semantics everywhere:
-	- `title` and `end` slides speak `slide.narration || slide.text || ''`.
-	- conversation slides speak `slide.text || slide.narration || ''`.
-- Render hashes are based on spoken text + voice + speed. If spoken text logic changes, cached audio and alignment must be invalidated.
+- **Stored paragraph text IS the spoken text.** Cleaning happens at import (and on editor save) via nSpeech `/v1/text/clean`, BEFORE paragraph splitting. Render (batch + single-paragraph), alignment, and the browser freshness hash all consume `paragraph.text` verbatim — no code path re-cleans.
+- Chat-client prefixes (`[minimax-chat · 21:37:11]:`) are stripped by regex at import, not by the LLM.
+- Unspeakable paragraphs (`---` dividers, punctuation-only) are dropped at import; any legacy ones are skipped by render and by the client status logic via the speakability test `/[\p{L}\p{N}]/u`.
+- Opening/end narrator messages are NOT nSpeech-cleaned — deterministic text, keeps the topic wording verbatim.
+- Render hash = text + engine + voice + speed. If the cleaning semantics change, every hash invalidates — re-render everything.
 
 ### Render Cache
 
