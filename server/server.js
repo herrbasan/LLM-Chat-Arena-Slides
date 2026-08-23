@@ -1506,16 +1506,26 @@ app.post('/api/tts-preview', async (req, res) => {
     try {
         const { text, voice, speed, engine } = req.body;
         if (!text) return res.status(400).json({ error: 'Missing text' });
+        // A missing voice falls back to a legacy id that current nSpeech
+        // engines don't know — which returns 200 + empty audio. Fail
+        // fast instead: the voice panel must be configured first.
+        if (!voice) return res.status(400).json({ error: 'Missing voice — configure the voice panel first' });
 
         // Clean text via nSpeech so the preview matches what the deck's
         // rendered TTS will say.
         const spokenText = await nspeech.cleanText(getSettings().nspeechUrl, text);
         const audioBuffer = await nspeech.tts(getSettings().nspeechUrl, {
             text: spokenText,
-            voice: voice || 'en-US-Male',
+            voice,
             speed: speed || 1.0,
             engine: engine || 'nspeech'
         });
+        // nSpeech returns 200 + empty audio for unknown voice ids
+        // (herrbasan/nSpeech#1) — never send a 0-byte body to the
+        // audio element, it surfaces as an opaque blob range error.
+        if (!audioBuffer || audioBuffer.length === 0) {
+            return res.status(502).json({ error: `TTS returned empty audio (voice "${voice}", engine "${engine || 'nspeech'}")` });
+        }
 
         res.setHeader('Content-Type', 'audio/mpeg');
         res.send(audioBuffer);
