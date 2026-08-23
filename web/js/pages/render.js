@@ -1750,17 +1750,6 @@ nui.registerPage('render', {
                 await stopRenderAll();
             }
 
-            if (action === 'export-deck') {
-                try {
-                    const res = await fetch(`/api/v3/export/${projectId}`, { method: 'POST' });
-                    const data = await res.json().catch(() => ({}));
-                    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-                    nui.components.banner.show({ content: `Exported: ${data.url} (${data.audioFiles} audio files)`, priority: 'success', autoClose: 8000 });
-                } catch (err) {
-                    nui.components.banner.show({ content: 'Export failed: ' + err.message, priority: 'alert', autoClose: 5000 });
-                }
-            }
-
             if (action === 'render-message') {
                 const idx = parseInt(param, 10);
                 await renderSingleMessage(idx);

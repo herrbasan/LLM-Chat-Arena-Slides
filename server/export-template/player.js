@@ -448,14 +448,14 @@ document.addEventListener('keydown', e => {
 });
 
 // ─── Boot ───
-// The player is standalone: ?src= points at any project.json (relative
-// or absolute URL). Audio URLs inside the project are resolved
-// relative to that file's location. Default: ./project.json (legacy
-// single-folder exports).
+// The player is standalone: ?src= points at a conversation folder
+// (project.json is appended) or directly at a project.json. Audio URLs
+// inside the project resolve relative to that file's location.
 
 await nui.ready();
 
-const srcParam = new URLSearchParams(location.search).get('src') || 'project.json';
+let srcParam = new URLSearchParams(location.search).get('src') || 'project.json';
+if (srcParam.endsWith('/')) srcParam += 'project.json';
 const srcUrl = new URL(srcParam, location.href);
 const audioSrc = (rel) => new URL(rel, srcUrl).href;
 

@@ -1261,91 +1261,10 @@ app.post('/api/v3/clean-text', async (req, res) => {
     }
 });
 
-// ─── v3 Export (project data for the standalone player) ─────
-// Writes data only: project.json + audio/*.mp3 into
-// server/data/exports/{slug}/. The player itself is served once from
-// server/export-template/ at /player/ and loads any export via
-// ?src=/exports/{slug}/project.json. For static hosting, deploy the
-// template folder once and point it at the data folder(s).
+// The export player template, served at /player/. Baking export
+// folders (project.json + transcript.md + audio/) is a build step,
+// not an API feature: node pipeline/export.js <projectId> [outDir].
 const EXPORT_TEMPLATE_ROOT = path.join(__dirname, 'export-template');
-
-app.post('/api/v3/export/:id', (req, res) => {
-    try {
-        if (!db) return res.status(500).json({ error: 'Database not available' });
-        const doc = db.get(req.params.id);
-        if (!doc) return res.status(404).json({ error: 'Project not found' });
-        if (doc.version !== 3) return res.status(400).json({ error: 'Not a v3 project' });
-
-        // An export is a publishable artifact: every speakable paragraph
-        // must have audio + alignment. Fail loud with the gaps.
-        const missing = [];
-        for (let mi = 0; mi < doc.messages.length; mi++) {
-            const paras = doc.messages[mi].paragraphs || [];
-            for (let pi = 0; pi < paras.length; pi++) {
-                const p = paras[pi];
-                if (!/[\p{L}\p{N}]/u.test(p.text || '')) continue; // unspeakable — skipped everywhere
-                if (!p.audioRef || !(p.words?.length > 0)) missing.push(`msg${mi}/p${pi}`);
-            }
-        }
-        if (missing.length > 0) {
-            return res.status(400).json({ error: `${missing.length} paragraph(s) not fully rendered`, missing: missing.slice(0, 20) });
-        }
-
-        const slug = String(doc.source?.topic || doc._id)
-            .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || doc._id;
-        const outDir = path.join(dbPath, 'exports', slug);
-        fs.rmSync(outDir, { recursive: true, force: true });
-        fs.mkdirSync(path.join(outDir, 'audio'), { recursive: true });
-
-        // The player is NOT copied per export — it is served standalone
-        // at /player/ and loads any project via ?src=. An export is data
-        // only: project.json + audio/*.mp3.
-
-        // Copy each referenced audio file once (the bucket dedups by
-        // content hash; paragraphs can share a file) and rewrite the
-        // URL to the relative export path.
-        const urlByRef = new Map();
-        const mapRef = (ref) => {
-            if (!ref) return null;
-            if (urlByRef.has(ref)) return urlByRef.get(ref);
-            const m = ref.match(/^([^:]+):([^.]+)\.(.+)$/);
-            if (!m) throw new Error(`Invalid audioRef: ${ref}`);
-            const rel = `audio/${m[2]}.${m[3]}`;
-            fs.writeFileSync(path.join(outDir, rel), db.getFile(m[1], m[2], m[3]));
-            urlByRef.set(ref, rel);
-            return rel;
-        };
-
-        const project = {
-            version: 3,
-            source: doc.source,
-            voiceMapping: doc.voiceMapping,
-            messages: doc.messages.map(m => ({
-                speaker: m.speaker,
-                label: m.label,
-                type: m.type,
-                text: m.text,
-                narration: m.narration,
-                createdAt: m.createdAt || null,
-                meta: m.meta || null,
-                conversationIdx: m.conversationIdx,
-                paragraphs: (m.paragraphs || []).map(p => ({
-                    text: p.text,
-                    audioUrl: mapRef(p.audioRef),
-                    words: p.words,
-                    durationMs: p.durationMs
-                }))
-            }))
-        };
-        fs.writeFileSync(path.join(outDir, 'project.json'), JSON.stringify(project));
-
-        console.log(`[Export] ${slug}: ${urlByRef.size} audio files, ${project.messages.length} messages`);
-        res.json({ slug, url: `/player/?src=/exports/${slug}/project.json`, audioFiles: urlByRef.size });
-    } catch (err) {
-        console.error('[Server] v3 export failed:', err.message);
-        res.status(500).json({ error: err.message });
-    }
-});
 
 // ─── v3 Render Progress (polling) ──────────────────────────
 
