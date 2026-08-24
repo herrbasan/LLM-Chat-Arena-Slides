@@ -550,12 +550,6 @@ nui-dialog[mode="page"] .options-source {
     opacity: 0.3;
 }
 
-/* Topic slide: future words stay fully readable because the words
- * container is the only text on the slide. */
-.slide--topic .words-container .word.future {
-    opacity: 1;
-}
-
 .words-container .segment {
     display: inline;
     opacity: 1;
@@ -601,23 +595,52 @@ nui-dialog[mode="page"] .options-source {
  * provides the surface; this adds the typographic weight. */
 .slide--topic .slide-body--text {
     font-weight: 700;
-    letter-spacing: -0.01em;
+    letter-spacing: normal;
+}
+
+/* Topic slide: plain centered text (no card), matching the setup and
+ * details slides. Normal word-spacing and letter-spacing; the framing
+ * lead words ("The following was...") are bold, the topic normal. */
+.slide--topic .words-container {
+    letter-spacing: normal;
+    word-spacing: normal;
+}
+.slide--topic .words-container .word {
+    font-weight: 400;
+    letter-spacing: normal;
+}
+.slide--topic .words-container .word--lead {
+    font-weight: 700;
+    letter-spacing: normal;
 }
 
 /* Per-role hook. Allows per-speaker tinting of the conversation slide. */
 .slide--speaker-narrator { }
 
-/* Speaker accent borders on conversation slides. participantA gets the
- * highlight blue, participantB gets palette-mark gold. Thin left border
- * only — keeps the reading surface clean while making the speaker
- * switch instantly recognizable. */
-.slide--speaker-participantA .slide-body {
-    border-left: 3px solid var(--color-highlight);
-    padding-left: var(--nui-space);
+/* Speaker accent colors (alternating). No left border on the text and
+ * no tinting of the body words — instead the speaker's model name and
+ * the split-chunk bullet dots are tinted with the speaker's accent
+ * color. participantA = highlight blue, participantB = palette-mark
+ * gold. */
+.slide--speaker-participantA {
+    --speaker-accent: var(--color-highlight);
 }
-.slide--speaker-participantB .slide-body {
-    border-left: 3px solid var(--palette-mark);
-    padding-left: var(--nui-space);
+.slide--speaker-participantB {
+    --speaker-accent: var(--palette-mark);
+}
+.slide--speaker-participantA .slide-header__label,
+.slide--speaker-participantB .slide-header__label {
+    color: var(--speaker-accent);
+}
+/* Bullet dots (split-chunk bubbles) take the speaker's accent. */
+.slide--speaker-participantA .slide-split-bubbles__bubble,
+.slide--speaker-participantB .slide-split-bubbles__bubble {
+    border-color: var(--speaker-accent);
+}
+.slide--speaker-participantA .slide-split-bubbles__bubble.is-active,
+.slide--speaker-participantB .slide-split-bubbles__bubble.is-active {
+    background: var(--speaker-accent);
+    border-color: var(--speaker-accent);
 }
 
 /* Position-in-deck hooks. */
@@ -729,7 +752,6 @@ nui-dialog[mode="page"] .options-source {
     justify-content: center;
     align-items: center;
     text-align: center;
-    height: 100%;
     padding: var(--nui-space-double);
 }
 .slide--layout-centered .slide-body--text {
@@ -752,12 +774,9 @@ nui-dialog[mode="page"] .options-source {
     color: var(--text-color-dim);
 }
 
-/* Accent background for the topic slide. */
-.slide--accent-bg {
-    background: var(--color-shade1);
-    border-radius: var(--border-radius2);
-    padding: var(--nui-space);
-}
+/* Accent background hook. Now unused (the topic slide is plain text),
+ * kept only if a slide opts into accentBackground styling later. */
+.slide--accent-bg { }
 
 /* ─── Details meta block ─── */
 
@@ -1021,8 +1040,25 @@ body.render-recording .render-layout {
 body.render-recording .render-player {
     height: 100vh;
 }
+/* Recording mode: generous margin on all sides so the scaled slide
+ * has breathing room. fitSlideToWidth() reads this padding and
+ * subtracts it from the available width/height, so the scale adapts. */
+body.render-recording #player-container {
+    padding: 6rem 12rem;
+}
+/* Recording mode: slightly smaller body text so longer slides stay
+ * comfortably inside the padded, height-aware scale. */
+body.render-recording .words-container .word {
+    font-size: 1.25rem;
+}
+/* Recording mode: keep the slide at a natural design width and let JS
+ * scale it up (transform: scale) so it fills the available horizontal
+ * space (minus the player padding) — an automatic replacement for
+ * manual browser zoom. overflow: visible lets the scaled slide show
+ * beyond the .slide wrapper, centered in the player. */
 body.render-recording #player-slide-content {
-    max-width: 1200px;
+    max-width: 900px;
+    overflow: visible;
 }
 
 .render-status-row {

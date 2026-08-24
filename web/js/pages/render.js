@@ -314,6 +314,7 @@ nui.registerPage('render', {
 
         const messageList = element.querySelector('#render-message-list');
         const playerContent = element.querySelector('#player-slide-content');
+        const playerContainer = element.querySelector('#player-container');
         const progressBar = element.querySelector('#playback-progress-bar');
         const progressFill = element.querySelector('#playback-progress-fill');
         const timeDisplay = element.querySelector('#time-display');
@@ -1367,11 +1368,19 @@ nui.registerPage('render', {
                     html += `<div class="slide-narration words-container">${buildWordSpans(slide.narration, slide.tts, slide._paragraphs)}</div>`;
                 }
             } else if (style.layout === 'centered') {
-                // Topic slide: large centered text with word highlighting.
-                // If aligned words exist, the words container is the
-                // primary text so the topic is not duplicated.
+                // Topic slide: one words-container so word-by-word
+                // highlighting still works. The framing lead ("The
+                // following was...") is styled differently via the
+                // word--lead class on the first words. Plain centered
+                // text — no card, matching the setup/details slides.
                 if (slide._paragraphs?.some(p => p.words?.length > 0)) {
-                    html += `<div class="slide-body words-container">${buildWordSpans(slide.narration || slide.text || '', slide.tts, slide._paragraphs)}</div>`;
+                    const narration = slide.narration || slide.text || '';
+                    const topicBody = (slide.text || narration).replace(/^\s*Topic:\s*/i, '').trim();
+                    const leadText = topicBody && narration.includes(topicBody)
+                        ? narration.slice(0, narration.indexOf(topicBody))
+                        : '';
+                    const leadWordCount = leadText.trim() ? leadText.trim().split(/\s+/).length : 0;
+                    html += `<div class="slide-body words-container">${buildWordSpans(narration, slide.tts, slide._paragraphs, leadWordCount)}</div>`;
                 } else {
                     html += `<div class="slide-body slide-body--text">${escapeHtml(slide.text || '')}</div>`;
                 }
@@ -1418,29 +1427,49 @@ nui.registerPage('render', {
             updateControls();
             updateProgress(0);
             updateTimeDisplay(0, tts?.durationMs || 0);
+
+            // If recording, re-fit the newly-rendered slide to width.
+            fitSlideToWidth();
             // Reflect the new current slide in the sidebar selection.
             renderMessageList();
         }
 
-        function buildWordSpans(text, tts, paragraphs) {
+        function buildWordSpans(text, tts, paragraphs, leadWordCount = 0) {
             // v3: build word spans per-paragraph, each with local timing (no offsets)
             if (paragraphs && paragraphs.length > 0) {
                 const allSpans = [];
+                let wordIndex = 0;
                 for (let pi = 0; pi < paragraphs.length; pi++) {
                     const para = paragraphs[pi];
                     const wordSpans = [];
                     if (para.words && para.words.length > 0) {
                         for (const w of para.words) {
+                            const cls = wordIndex < leadWordCount
+                                ? 'word word--lead future'
+                                : 'word future';
                             wordSpans.push(
-                                `<span class="word future" data-start="${w.startMs}" data-end="${w.endMs}">${escapeHtml(w.word)}</span> `
+                                `<span class="${cls}" data-start="${w.startMs}" data-end="${w.endMs}">${escapeHtml(w.word)}</span> `
                             );
+                            // After the last framing-lead word, drop to a new
+                            // line so the topic sits clearly below the lead.
+                            if (leadWordCount > 0 && wordIndex === leadWordCount - 1) {
+                                wordSpans.push('<br><br>');
+                            }
+                            wordIndex++;
                         }
                     } else if (para.text) {
                         // Paragraph exists but hasn't been aligned yet (or
                         // alignment produced no words). Show the text so the
                         // slide isn't blank; it will gain word timing after
                         // render/alignment.
-                        wordSpans.push(`<span class="word future">${escapeHtml(para.text)}</span>`);
+                        const cls = wordIndex < leadWordCount
+                            ? 'word word--lead future'
+                            : 'word future';
+                        wordSpans.push(`<span class="${cls}">${escapeHtml(para.text)}</span>`);
+                        if (leadWordCount > 0 && wordIndex === leadWordCount - 1) {
+                            wordSpans.push('<br><br>');
+                        }
+                        wordIndex++;
                     }
                     // Wrap this paragraph's words in a container with para index
                     allSpans.push(`<span class="para-words" data-para-idx="${pi}">${wordSpans.join('')}</span>`);
@@ -1476,6 +1505,14 @@ nui.registerPage('render', {
             return [];
         }
 
+        // Sets a word's highlight state while preserving the word--lead
+        // class (used by the topic slide's framing sentence) so its
+        // styling survives playback.
+        function setWordState(el, state) {
+            const lead = el.classList.contains('word--lead') ? ' word--lead' : '';
+            el.className = `word ${state}${lead}`;
+        }
+
         function updateWordHighlight(currentTimeMs) {
             const slide = deck?.slides?.[currentSlideIdx];
 
@@ -1488,25 +1525,25 @@ nui.registerPage('render', {
 
                     if (pi < currentParaIdx) {
                         // Past paragraph — all words are past
-                        words.forEach(el => { el.className = 'word past'; });
+                        words.forEach(el => { setWordState(el, 'past'); });
                     } else if (pi === currentParaIdx) {
                         // Current paragraph — use local audio time
                         words.forEach(el => {
                             const startMs = parseFloat(el.dataset.start);
                             const endMs = parseFloat(el.dataset.end);
                             if (isNaN(startMs) || isNaN(endMs)) {
-                                el.className = 'word future';
+                                setWordState(el, 'future');
                             } else if (currentTimeMs >= startMs && currentTimeMs < endMs) {
-                                el.className = 'word active';
+                                setWordState(el, 'active');
                             } else if (currentTimeMs >= endMs) {
-                                el.className = 'word past';
+                                setWordState(el, 'past');
                             } else {
-                                el.className = 'word future';
+                                setWordState(el, 'future');
                             }
                         });
                     } else {
                         // Future paragraph — all words are future
-                        words.forEach(el => { el.className = 'word future'; });
+                        words.forEach(el => { setWordState(el, 'future'); });
                     }
                 });
                 return;
@@ -1521,16 +1558,16 @@ nui.registerPage('render', {
                 const endMs = parseFloat(el.dataset.end);
 
                 if (isNaN(startMs) || isNaN(endMs)) {
-                    el.className = 'word future';
+                    setWordState(el, 'future');
                     return;
                 }
 
                 if (currentTimeMs >= startMs && currentTimeMs < endMs) {
-                    el.className = 'word active';
+                    setWordState(el, 'active');
                 } else if (currentTimeMs >= endMs) {
-                    el.className = 'word past';
+                    setWordState(el, 'past');
                 } else {
-                    el.className = 'word future';
+                    setWordState(el, 'future');
                 }
             });
         }
@@ -1549,6 +1586,37 @@ nui.registerPage('render', {
         // and shows the controls again. Useful for screen-recording
         // the slides or for a clean presentation view.
         let isRecording = false;
+
+        // ─── Fit-to-viewport scaling (recording mode) ───
+        // Instead of relying on manual browser zoom, recording mode
+        // renders the slide at its natural width then scales it up
+        // with a transform so it fills the available horizontal space
+        // (minus the player padding). The scale is capped by the
+        // available height so longer slides never overflow vertically.
+        // Recomputed on slide change and window resize; cleared on
+        // exit. When not recording this is a no-op.
+        function fitSlideToWidth() {
+            if (!isRecording) return;
+            const slide = playerContent && playerContent.querySelector('.slide');
+            if (!slide || !playerContainer) return;
+            // Reset before measuring so the measurement is at scale 1.
+            slide.style.transform = '';
+            const naturalW = playerContent.getBoundingClientRect().width;
+            const naturalH = slide.getBoundingClientRect().height;
+            if (!naturalW || naturalW <= 0 || !naturalH || naturalH <= 0) return;
+            const cs = getComputedStyle(playerContainer);
+            const padL = parseFloat(cs.paddingLeft) || 0;
+            const padR = parseFloat(cs.paddingRight) || 0;
+            const padT = parseFloat(cs.paddingTop) || 0;
+            const padB = parseFloat(cs.paddingBottom) || 0;
+            const availW = playerContainer.clientWidth - padL - padR;
+            const availH = playerContainer.clientHeight - padT - padB;
+            if (!availW || availW <= 0 || !availH || availH <= 0) return;
+            // Fill the width, but never let the slide overflow the height.
+            const scale = Math.min(availW / naturalW, availH / naturalH);
+            slide.style.transformOrigin = 'center center';
+            slide.style.transform = `scale(${scale})`;
+        }
 
         async function enterRecordingMode() {
             if (isRecording) return;
@@ -1571,6 +1639,7 @@ nui.registerPage('render', {
                 // still works without it — the layout is clean.
                 console.warn('[Record] fullscreen request failed:', err.message);
             }
+            fitSlideToWidth();
         }
 
         async function exitRecordingMode() {
@@ -1578,6 +1647,7 @@ nui.registerPage('render', {
             isRecording = false;
             document.body.classList.remove('render-recording');
             updateRecordButton();
+            clearSlideScale();
             try {
                 if (document.fullscreenElement) {
                     await document.exitFullscreen();
@@ -1585,6 +1655,10 @@ nui.registerPage('render', {
             } catch (err) {
                 console.warn('[Record] exitFullscreen failed:', err.message);
             }
+        }
+
+        function clearSlideScale() {
+            document.querySelectorAll('.slide').forEach(s => { s.style.transform = ''; });
         }
 
         function toggleRecordingMode() {
@@ -1607,8 +1681,16 @@ nui.registerPage('render', {
                 isRecording = false;
                 document.body.classList.remove('render-recording');
                 updateRecordButton();
+                clearSlideScale();
+            } else if (document.fullscreenElement && isRecording) {
+                // Viewport just changed to fullscreen — re-fit the slide.
+                fitSlideToWidth();
             }
         });
+
+        // Re-fit when the viewport changes size (browser window resize,
+        // device rotation, etc.).
+        window.addEventListener('resize', () => fitSlideToWidth());
 
         // Also handle Esc as a fallback for browsers that don't fire
         // fullscreenchange reliably on key-exit.
