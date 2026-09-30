@@ -1,4 +1,5 @@
 import { nui } from '/nui/nui.js';
+import { escapeHtml } from '../lib/html.js';
 
 const MONTHS = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -1950,12 +1951,3 @@ nui.registerPage('render', {
         };
     }
 });
-
-function escapeHtml(s) {
-    if (!s) return '';
-    return s.toString()
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
