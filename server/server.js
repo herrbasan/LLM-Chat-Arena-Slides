@@ -1022,6 +1022,7 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         let processedCount = 0;
         let renderedCount = 0;
         let alignSucceeded = 0;
+        let ttsFailed = 0;
         let totalWordsRendered = 0;
         let stopped = false;
 
@@ -1060,6 +1061,14 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
                     const para = project.messages[msgIdx].paragraphs[paraIdx];
                     const wordCount = (para.text || '').split(/\s+/).filter(w => w.length > 0).length;
                     totalWordsRendered += wordCount;
+                } else if (result.error) {
+                    // renderParagraph returns { error } when TTS gave up, which
+                    // is the only place that failure is visible — the paragraph
+                    // also carries ttsError, but on a cached (not forced)
+                    // paragraph ttsError can be left over from an earlier run.
+                    // Counting only successes is what let a run where 68 of 258
+                    // paragraphs hit a TTS 429 report 100% and "0 failures".
+                    ttsFailed++;
                 }
                 if (result.aligned) alignSucceeded++;
 
@@ -1118,15 +1127,29 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
 
         if (stopped) {
             const alignFailed = renderedCount - alignSucceeded;
-            console.log(`[v3 Render] Stopped for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${alignFailed} alignment failures, ${processedCount} processed, ${finalWps} words/s (${totalElapsedSec.toFixed(1)}s)`);
-            writeRenderProgress(projectId, 'stopped', `Render stopped: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${alignFailed} alignment failures`, 0);
-            return res.json({ stopped: true, project, renderedCount, alignSucceeded, processedCount });
+            console.log(`[v3 Render] Stopped for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${alignFailed} alignment failures, ${ttsFailed} TTS failures, ${processedCount} processed, ${finalWps} words/s (${totalElapsedSec.toFixed(1)}s)`);
+            writeRenderProgress(projectId, 'stopped', `Render stopped: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${alignFailed} alignment failures, ${ttsFailed} TTS failures`, 0);
+            return res.json({ stopped: true, project, renderedCount, alignSucceeded, ttsFailed, processedCount });
         }
 
+        // pct is completion of the RUN, not of the work: every target was
+        // attempted, but a TTS 429 leaves the paragraph unrendered. Reporting a
+        // hardcoded 100 here is what let a 190/258 render announce itself as
+        // finished and clean.
+        const failed = ttsFailed + (renderedCount - alignSucceeded);
+        const okPct = totalToRender === 0 ? 100 : Math.round((renderedCount / totalToRender) * 100);
+        const stage = failed > 0 ? 'incomplete' : 'done';
         const alignFailed = renderedCount - alignSucceeded;
-        console.log(`[v3 Render] Complete for ${projectId}: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${alignFailed} alignment failures, ${processedCount} processed, ${finalWps} words/s (${totalElapsedSec.toFixed(1)}s)`);
-        writeRenderProgress(projectId, 'done', `Render complete: ${renderedCount} re-rendered, ${alignSucceeded} aligned, ${alignFailed} alignment failures (${finalWps} words/s)`, 100);
-        res.json(project);
+        console.log(`[v3 Render] Complete for ${projectId}: ${renderedCount}/${totalToRender} re-rendered, ${alignSucceeded} aligned, ${ttsFailed} TTS failures, ${alignFailed} alignment failures, ${processedCount} processed, ${finalWps} words/s (${totalElapsedSec.toFixed(1)}s)`);
+        writeRenderProgress(projectId, stage,
+            failed > 0
+                ? `Render incomplete: ${renderedCount}/${totalToRender} rendered, ${ttsFailed} TTS failures, ${alignFailed} alignment failures — retry`
+                : `Render complete: ${renderedCount} re-rendered, ${alignSucceeded} aligned, 0 failures (${finalWps} words/s)`,
+            okPct);
+        // A partial render is still a 200 with a usable deck — the client
+        // re-reads the progress file to decide success vs warning, so the
+        // counts travel with the document rather than being a second fetch.
+        res.json({ ...project, _render: { stage, pct: okPct, rendered: renderedCount, total: totalToRender, ttsFailed, alignFailed } });
     } catch (err) {
         renderControllers.delete(projectId);
         console.error('[Server] v3 Render failed:', err.message);

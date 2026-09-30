@@ -1235,7 +1235,7 @@ nui.registerPage('render', {
                     if (!res.ok) return;
                     const p = await res.json();
                     updateProgress(p.message, p.pct);
-                    if (p.stage === 'done' || p.stage === 'stopped') {
+                    if (p.stage === 'done' || p.stage === 'stopped' || p.stage === 'incomplete') {
                         clearInterval(pollTimer);
                     }
                     // Refresh message status dots every few percent
@@ -1275,8 +1275,19 @@ nui.registerPage('render', {
                 virtualSlides = buildVirtualSlides();
                 deck.slides = virtualSlides;
 
-                updateProgress('Render complete', 100);
-                nui.components.banner.show({ content: `Render complete: ${rendered.messages.length} messages`, priority: 'success', autoClose: 3000 });
+                // The server reports what actually happened. A partial render
+                // still returns 200 with a usable deck, so a green "Render
+                // complete" here unconditionally is what hid a 190/258 render
+                // whose remaining 68 paragraphs had all failed on a TTS 429.
+                const outcome = rendered._render;
+                if (outcome && outcome.stage === 'incomplete') {
+                    const msg = `Render incomplete: ${outcome.rendered}/${outcome.total} rendered, ${outcome.ttsFailed} TTS failures, ${outcome.alignFailed} alignment failures — retry`;
+                    updateProgress(msg, 0);
+                    nui.components.banner.show({ content: msg, priority: 'warning', autoClose: 8000 });
+                } else {
+                    updateProgress('Render complete', 100);
+                    nui.components.banner.show({ content: `Render complete: ${rendered.messages.length} messages`, priority: 'success', autoClose: 3000 });
+                }
             } catch (err) {
                 clearInterval(pollTimer);
                 if (err.name === 'AbortError' || err.message?.includes('aborted')) {
