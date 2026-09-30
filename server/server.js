@@ -14,15 +14,11 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 // (local engines serialize on the ONNX lock → 1, cloud engines → more).
 const RENDER_CONCURRENCY = parseInt(process.env.RENDER_CONCURRENCY || '4', 10);
 
-// Attempt to load nDB
-let nDB;
-try {
-    nDB = require('../modules/nDB/napi/index.js');
-    console.log('[Server] Successfully loaded nDB driver.');
-} catch (err) {
-    console.error('[Server] Failed to load nDB natively:', err.message);
-    console.error('Ensure that the prebuilt binaries exist and are compatible.');
-}
+// nDB driver. Loads through ./ndb.js, which vendors the native binary for this
+// platform (verifying it against the release SHA-256 when it has to download)
+// and throws if it cannot. A database that failed to load is not a degraded
+// mode — every route here would answer 500 anyway, so it is a dead server.
+const nDB = require('./ndb.js');
 
 // Pipeline modules
 const { buildProject } = require('../pipeline/build-messages.js');
@@ -69,9 +65,17 @@ if (!fs.existsSync(dbPath)) {
     fs.mkdirSync(dbPath, { recursive: true });
 }
 
-let db;
-if (nDB) {
-    db = nDB.Database.open(path.join(dbPath, 'slideshows.jsonl'), { persistence: 'immediate' });
+const db = nDB.Database.open(path.join(dbPath, 'slideshows.jsonl'), { persistence: 'immediate' });
+
+// nDB keeps exceptions as its error contract: db.get() THROWS for an id that is
+// absent or soft-deleted, it does not return null. Every "project not found"
+// path below therefore has to ask db.contains() first — a bare `if (!doc)` after
+// get() is unreachable, and the route answers 500 where it means 404.
+// A missing project is an ordinary domain outcome here, not a failure: the
+// client asked for something that isn't there, and 404 is the true answer.
+function findProject(id) {
+    if (!db.contains(id)) return null;
+    return db.get(id);
 }
 
 // ─── Application Settings (runtime, persisted in nDB) ─────────
@@ -91,7 +95,6 @@ let settingsCache = {};    // process-memory mirror
 // On startup, find the existing settings record (if any) and cache
 // its id + contents in memory.
 (function loadSettings() {
-    if (!db) return;
     try {
         const all = db.iter();
         for (const doc of all) {
@@ -112,7 +115,6 @@ function loadStoredSettings() {
 }
 
 function saveStoredSettings(partial) {
-    if (!db) throw new Error('Database not available');
     const merged = { ...settingsCache, ...partial, updatedAt: Date.now() };
     merged._type = SETTINGS_TYPE; // marker so we can find this record on startup
     if (settingsId) {
@@ -480,12 +482,15 @@ window.SLIDESHOW_CONFIG = {
 
 // APIs
 app.get('/api/projects', async (req, res) => {
-    if (!db) {
-        return res.status(500).json({ error: 'Database not initialized' });
-    }
     try {
-        const projects = await db.query({}); // Return all
-        // Return only metadata for the list to save bandwidth if decks are large.
+        // query({}) is "everything", and nDB has no second table — the
+        // app_settings record sits in this same collection, so it has to be
+        // filtered out here or the browser renders it as an empty project card.
+        const all = await db.query({});
+        const projects = all.filter(doc => doc._type !== SETTINGS_TYPE);
+        // NOTE: these are full documents, not metadata (the list is ~1.3 MB
+        // for three decks). nDB 1.5.0's queryPage(ast, opts, fields) projects
+        // server-side if that ever needs trimming.
         res.json({ projects });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -493,7 +498,6 @@ app.get('/api/projects', async (req, res) => {
 });
 
 app.post('/api/projects', (req, res) => {
-    if (!db) return res.status(500).json({ error: 'Database not initialized' });
     const body = req.body;
     const isV3 = body.version === 3 || (body.messages && !body.slides);
 
@@ -522,8 +526,7 @@ app.post('/api/projects', (req, res) => {
 });
 
 app.get('/api/projects/:id', (req, res) => {
-    if (!db) return res.status(500).json({ error: 'Database not initialized' });
-    const doc = db.get(req.params.id);
+    const doc = findProject(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Project not found' });
 
     // v3 projects: render state is authoritative only from nDB.
@@ -600,13 +603,11 @@ app.get('/api/engines', async (req, res) => {
 //                                       the stored value (env default takes
 //                                       over on next read).
 app.get('/api/settings', (req, res) => {
-    if (!db) return res.status(500).json({ error: 'Database not initialized' });
     const includeSecrets = req.query.includeSecrets === '1' || req.query.includeSecrets === 'true';
     res.json(getPublicSettings(includeSecrets));
 });
 
 app.put('/api/settings', (req, res) => {
-    if (!db) return res.status(500).json({ error: 'Database not initialized' });
     const body = req.body || {};
     // Only allow known keys; ignore anything else to avoid surprises.
     const allowed = ['llmGatewayUrl', 'llmGatewayApiKey', 'nspeechUrl'];
@@ -629,8 +630,7 @@ app.put('/api/settings', (req, res) => {
 });
 
 app.put('/api/projects/:id', (req, res) => {
-    if (!db) return res.status(500).json({ error: 'Database not initialized' });
-    const existing = db.get(req.params.id);
+    const existing = findProject(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Project not found' });
 
     const updated = {
@@ -655,7 +655,11 @@ app.put('/api/projects/:id', (req, res) => {
 });
 
 app.delete('/api/projects/:id', (req, res) => {
-    if (!db) return res.status(500).json({ error: 'Database not initialized' });
+    // db.delete() throws for an id that is absent or already soft-deleted, so
+    // check first — a second delete is a 404, not a 500.
+    if (!db.contains(req.params.id)) {
+        return res.status(404).json({ error: 'Project not found' });
+    }
     db.delete(req.params.id);
     // The conversation document is now in nDB's trash. Its audioRefs
     // are no longer referenced by any active document — gcBuckets()
@@ -882,15 +886,12 @@ app.post('/api/render-deck/:id', async (req, res) => {
         }
 
         // Persist rendered deck metadata back to nDB so render page shows correct state
-        if (db) {
-            const existing = db.get(projectId);
-            if (existing) {
-                db.update(projectId, {
-                    ...existing,
-                    slides: deck.slides,
-                    updatedAt: Date.now()
-                });
-            }
+        if (db.contains(projectId)) {
+            db.update(projectId, {
+                ...db.get(projectId),
+                slides: deck.slides,
+                updatedAt: Date.now()
+            });
         }
 
         console.log(`[Render] Complete for ${projectId}: ${reRendered} generated, ${cached} cached, ${deck.slides.length} slides`);
@@ -915,7 +916,7 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         // Load the project from nDB. The browser sends its view of the
         // project, but nDB is the source of truth. We only use the request
         // body for intent (force, targets) and voice mapping overrides.
-        const storedProject = db.get(projectId);
+        const storedProject = findProject(projectId);
         if (!storedProject) {
             return res.status(404).json({ error: 'Project not found' });
         }
@@ -1001,20 +1002,15 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
                 }
 
                 // Periodic intermediate persistence
-                if (processedCount % 10 === 0) {
-                    if (db) {
-                        const existing = db.get(projectId);
-                        if (existing) {
-                            db.update(projectId, {
-                                ...existing,
-                                version: 3,
-                                messages: project.messages,
-                                voiceMapping: project.voiceMapping,
-                                source: project.source,
-                                updatedAt: Date.now()
-                            });
-                        }
-                    }
+                if (processedCount % 10 === 0 && db.contains(projectId)) {
+                    db.update(projectId, {
+                        ...db.get(projectId),
+                        version: 3,
+                        messages: project.messages,
+                        voiceMapping: project.voiceMapping,
+                        source: project.source,
+                        updatedAt: Date.now()
+                    });
                 }
             }
             stopped = true;
@@ -1032,18 +1028,15 @@ app.post('/api/v3/render-deck/:id', async (req, res) => {
         const finalWps = totalElapsedSec > 0 ? (totalWordsRendered / totalElapsedSec).toFixed(1) : '0';
 
         // Persist to nDB
-        if (db) {
-            const existing = db.get(projectId);
-            if (existing) {
-                db.update(projectId, {
-                    ...existing,
-                    version: 3,
-                    messages: project.messages,
-                    voiceMapping: project.voiceMapping,
-                    source: project.source,
-                    updatedAt: Date.now()
-                });
-            }
+        if (db.contains(projectId)) {
+            db.update(projectId, {
+                ...db.get(projectId),
+                version: 3,
+                messages: project.messages,
+                voiceMapping: project.voiceMapping,
+                source: project.source,
+                updatedAt: Date.now()
+            });
         }
 
         // Garbage-collect orphaned audio via nDB's bucket GC.
@@ -1090,8 +1083,7 @@ app.post('/api/v3/render-message/:id/:msgIdx', async (req, res) => {
         const projectId = req.params.id;
         const msgIdx = parseInt(req.params.msgIdx, 10);
 
-        if (!db) return res.status(500).json({ error: 'Database not available' });
-        const doc = db.get(projectId);
+        const doc = findProject(projectId);
         if (!doc) return res.status(404).json({ error: 'Project not found' });
         if (doc.version !== 3) return res.status(400).json({ error: 'Not a v3 project' });
 
@@ -1133,8 +1125,7 @@ app.post('/api/v3/render-paragraph/:id/:msgIdx/:paraIdx', async (req, res) => {
         const mi = parseInt(msgIdx, 10);
         const pi = parseInt(paraIdx, 10);
 
-        if (!db) return res.status(500).json({ error: 'Database not available' });
-        const doc = db.get(projectId);
+        const doc = findProject(projectId);
         if (!doc) return res.status(404).json({ error: 'Project not found' });
         if (doc.version !== 3) return res.status(400).json({ error: 'Not a v3 project' });
 
@@ -1289,8 +1280,7 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
         const projectId = req.params.id;
         const slideIdx = parseInt(req.params.idx, 10);
 
-        if (!db) return res.status(500).json({ error: 'Database not initialized' });
-        const doc = db.get(projectId);
+        const doc = findProject(projectId);
         if (!doc) return res.status(404).json({ error: 'Project not found' });
 
         const deck = doc;
@@ -1362,13 +1352,13 @@ app.post('/api/render-slide/:id/:idx', async (req, res) => {
             }
         }
 
-        // Update nDB
-        const existing = db.get(projectId);
-        if (existing) {
-            existing.slides[slideIdx] = slide;
-            existing.updatedAt = Date.now();
-            db.update(projectId, existing);
-        }
+        // Update nDB. `doc` is the very object the render above mutated in
+        // place (deck === doc), and the route already proved it exists via
+        // findProject() — re-reading it here would only add a second lookup
+        // that throws if the project was deleted mid-render.
+        doc.slides[slideIdx] = slide;
+        doc.updatedAt = Date.now();
+        db.update(projectId, doc);
         gcAudio();
 
         res.json({ slideIdx, slide });
@@ -1609,3 +1599,14 @@ app.listen(PORT, () => {
     console.log(`[Server] Slideshow backend running on http://localhost:${PORT}`);
     console.log(`[Server] Serving frontend from: ${path.join(__dirname, '../web')}`);
 });
+
+// Release the database file handles on a normal shutdown. close() is
+// idempotent, and any later operation reports "Database closed" rather than
+// touching a half-torn-down file.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => {
+        console.log(`[Server] ${signal} received — closing database.`);
+        db.close();
+        process.exit(0);
+    });
+}
