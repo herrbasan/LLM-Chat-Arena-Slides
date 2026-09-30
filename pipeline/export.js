@@ -31,11 +31,14 @@ if (!process.env.NDB_DATA_PATH) {
     throw new Error('NDB_DATA_PATH not set — check server/.env');
 }
 
-const nDB = require('../modules/nDB/napi/index.js');
+const nDB = require('../server/ndb.js');
 const db = nDB.Database.open(path.resolve(__dirname, '../server', process.env.NDB_DATA_PATH, 'slideshows.jsonl'), { persistence: 'immediate' });
 
+// db.get() throws for an absent or soft-deleted id (nDB keeps exceptions as
+// its error contract), so the existence check is explicit — otherwise a typo'd
+// projectId surfaces as "Get failed: not found" instead of the message below.
+if (!db.contains(projectId)) throw new Error(`Project not found: ${projectId}`);
 const doc = db.get(projectId);
-if (!doc) throw new Error(`Project not found: ${projectId}`);
 if (doc.version !== 3) throw new Error('Not a v3 project');
 
 // ─── Validation: every speakable paragraph rendered + aligned ───
@@ -204,3 +207,7 @@ ${items}
 }
 
 regenerateListing(outputRoot);
+
+// Release the store before the process exits, so a server started straight
+// after an export opens a cleanly-closed database rather than one still held.
+db.close();

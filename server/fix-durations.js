@@ -7,7 +7,7 @@
 // Safe to re-run — it just overwrites durationMs with the true MP3 length.
 
 const path = require('path');
-const nDB = require('../modules/nDB/napi');
+const nDB = require('./ndb.js');
 const { mp3DurationMs } = require('./mp3-duration.js');
 
 const dbPath = path.resolve(__dirname, process.env.NDB_DATA_PATH || './data');
@@ -22,8 +22,10 @@ function readAudio(audioRef) {
 }
 
 (async () => {
-    const result = await db.query({});
-    const projects = result.projects || result.docs || (Array.isArray(result) ? result : []);
+    // query() resolves to a plain array of documents — the old
+    // `result.projects || result.docs || Array.isArray(...)` chain could only
+    // ever fall through to the empty array, silently fixing nothing.
+    const projects = await db.query({});
     let fixedParas = 0, fixedSlides = 0, skipped = 0, errors = 0;
 
     for (const doc of projects) {
@@ -78,5 +80,8 @@ function readAudio(audioRef) {
     }
 
     console.log(`\nDone: ${fixedParas} paragraphs, ${fixedSlides} slides fixed; ${skipped} projects unchanged; ${errors} errors`);
+    // Explicit close before exit: this script WRITES, and process.exit() would
+    // otherwise drop the handle without a clean teardown.
+    db.close();
     process.exit(0);
 })().catch(e => { console.error('FATAL:', e); process.exit(1); });
