@@ -137,7 +137,7 @@ Multiple `memory.store` calls per topic are expected — store aggressively. Pre
 ### Runtime / Storage
 - **Server:** `server/server.js` at `http://localhost:3600`.
 - **Audio binaries:** Stored in nDB file bucket `rendered_slides` as `audioRef`/`audioUrl` on each paragraph. nDB deduplicates by SHA-256 content hash.
-- **nDB:** Used for append-style JSONL project persistence only.
+- **nDB:** Append-style JSONL project persistence. v1.5.0 — see "nDB Submodule" and "nDB Exception Contract" above before touching any `db.*` call.
 - **nSpeech / nVoice:** External services via `NSPEECH_URL` and `NVOICE_URL`. Current local development uses **HTTP** `http://192.168.0.100:2244` for nVoice (self-signed HTTPS stopped working with Node v24's `fetch`).
 
 ### Recent Features (committed and pushed)
@@ -159,10 +159,23 @@ Multiple `memory.store` calls per topic are expected — store aggressively. Pre
 - **nSpeech Kokoro thread-safety bug fixed upstream.** Lock was narrowed to voice-state only; ONNX inference runs in parallel. `RENDER_CONCURRENCY=4` restored. Throughput ~17-18 words/s.
 - **nVoice now serves HTTP.** `http://192.168.0.100:2244`. Node v24 `fetch()` ignores `https.Agent({ rejectUnauthorized: false })`; plain HTTP avoids the cert issue entirely.
 
-### NUI Submodule Patches
-- `modules/nui_wc2` carries two local patches on top of upstream `main`:
-  - `6f388a1` — don't clobber `itemHeight` while hidden (`list.stop` guard).
-  - `80ac441` — never accept zero `itemHeight`; defer initial render until layout.
+### nDB Submodule — v1.5.0 (updated 2026-09-30)
+
+- **Both submodules are at upstream `main` and carry NO local-only commits.** The two `nui_wc2` patches this repo used to hold (`6f388a1` list.stop itemHeight guard, `80ac441` never accept zero `itemHeight`) are **upstream now** — `origin/main..HEAD` is empty. `.gitmodules` declares `branch = main` for both, so drift shows as "behind" instead of hiding on a detached HEAD. **Never `git submodule update --remote`** — it detaches. Fetch, then `git -C <sub> merge --ff-only origin/main`.
+- **nDB v1.5.0** (`37813f8`) ships the 2026-09-28 audit: journal-before-in-memory-commit write ordering, secondary-index maintenance on `set`/`remove`/`array_push`, full-text search bindings, item buckets, `queryPage`, and a poisoned lock that is reported instead of aborting the host.
+- **The data format is compatible.** Verified 2026-09-30 by opening the real 226 MB store after the bump: 3 projects, 565 paragraphs, every `audioRef` readable and byte-exact, alignment (`alignVersion: 7`) intact.
+- **`napi/vendor.js` is the release-binary path.** It fetches the asset for the current platform and refuses to write it unless it matches the release's `.sha256` sidecar. On win32-x64 it is a no-op — the binary is committed in the submodule.
+- **Every process that touches the database requires `server/ndb.js`, never `modules/nDB/napi` directly.** That module spawns `vendor.js` (spawned, not required, so its `process.exit()` on failure cannot kill the host) and then requires the driver. Three consumers: `server/server.js`, `server/fix-durations.js`, `pipeline/export.js`.
+
+### nDB Exception Contract — the rule that bites
+
+**nDB keeps exceptions as its error contract. `db.get(id)` THROWS for an id that is absent or soft-deleted; it does not return `null`. `db.delete(id)` throws for a missing id too.** This is *not* a recent change — the contract is identical at `v1.4.0` — so any code assuming a falsy return is silently broken.
+
+- **`if (!doc)` after `db.get(id)` is unreachable.** Express turns the throw into a 500. Check `db.contains(id)` first; `server.js` has a `findProject(id)` helper for exactly this.
+- **`app_settings` is not a separate table.** It lives in the same collection as the slideshows, so `db.query({})` returns it. Any "all projects" query must filter `_type !== 'app_settings'` or the browser renders an empty project card.
+- **`db.query()` is async** and resolves to a plain array of documents — not a wrapper object, and not `{projects}`. The old `result.projects || result.docs || Array.isArray(result)` chain in `fix-durations.js` could only ever reach its empty-array branch.
+- **`db.iter()` marshals the whole database as one JSON string** across the napi boundary (~2 GB ceiling). It is fine at 226 MB, but a large corpus should page with `queryWith({limit, offset})` or `queryPage`.
+- **`db.close()` is idempotent** and any later operation reports `Database closed`. The server closes on SIGINT/SIGTERM — inert on Windows, where Node cannot intercept `process.kill`, but live on a console Ctrl+C and on POSIX.
 
 ### Visual Styling (current)
 - **Conversation slides:** no eyebrow label (`showEyebrow: false` in `SLIDE_STYLES`).
@@ -172,6 +185,8 @@ Multiple `memory.store` calls per topic are expected — store aggressively. Pre
 ### Pitfalls to remember
 - The NUI router caches pages and initially appends them `display:none`. Any component that measures geometry must wait for visibility.
 - The render page now reloads the project from the server on every `show()` so editor voice changes are reflected.
+- **`db.get()` throws for a missing id — a missing project is a 404, not a 500.** Use `findProject(id)` in `server.js`, or `db.contains(id)` first, anywhere that asks "does this project exist". This was broken for every project route until 2026-09-30.
+- **`GET /api/projects` sends full documents, not metadata** (~1.3 MB for three decks). nDB's `queryPage(ast, opts, fields)` projects server-side if that ever needs trimming.
 - **`.env.local` overrides `.env`. Stored app settings (`PUT /api/settings`) override both.** When changing `NSPEECH_URL`, update all three or check `GET /api/settings` to confirm the effective value.
 - nSpeech can return HTTP 200 with empty audio for unknown voice ids (herrbasan/nSpeech#1) — both render paths guard against it, but if TTS "succeeds" with no audio, check the voice id first.
 - The pipeline has retry logic for TTS and alignment as a safety net, but failures should be rare now.
