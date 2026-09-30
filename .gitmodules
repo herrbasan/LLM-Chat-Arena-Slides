@@ -1,6 +1,8 @@
 [submodule "modules/nui_wc2"]
 	path = modules/nui_wc2
 	url = https://github.com/herrbasan/nui_wc2.git
+	branch = main
 [submodule "modules/nDB"]
 	path = modules/nDB
 	url = https://github.com/herrbasan/nDB.git
+	branch = main
