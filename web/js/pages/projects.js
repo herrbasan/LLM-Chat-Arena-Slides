@@ -282,7 +282,24 @@ nui.registerPage('projects', {
             }
         }
 
-        loadProjects();
+        // First paint. The router also calls show() on the very first
+        // navigation, so `firstLoadDone` makes that duplicate a no-op — the
+        // projects list is the full documents, not a projection, and fetching
+        // it twice on entry is a megabyte of waste for nothing.
+        let firstLoadDone = false;
+        loadProjects().finally(() => { firstLoadDone = true; });
+
+        // The page is cached (init() runs once), so without this hook the list
+        // is whatever it was at first load: a deck rendered or re-rendered in
+        // another tab still shows its old badge, and a new import never appears.
+        //
+        // Re-fetching is the point; the fingerprint guard inside loadProjects()
+        // then skips the DOM rebuild when nothing actually changed, so this
+        // costs one request rather than a re-render of every row.
+        element.show = () => {
+            if (!firstLoadDone) return;
+            loadProjects();
+        };
     }
 });
 
