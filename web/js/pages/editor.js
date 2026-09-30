@@ -1,6 +1,5 @@
 import { nui } from '/nui/nui.js';
 import { GatewayClient } from '../gateway-client.js';
-import { escapeHtml } from '../lib/html.js';
 
 nui.registerPage('editor', {
     html: 'editor.html',
@@ -933,3 +932,12 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
         };
     }
 });
+
+function escapeHtml(s) {
+    if (!s) return '';
+    return s.toString()
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}

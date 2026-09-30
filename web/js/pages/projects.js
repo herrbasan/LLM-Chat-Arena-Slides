@@ -1,5 +1,4 @@
 import { nui } from '/nui/nui.js';
-import { escapeHtml } from '../lib/html.js';
 
 nui.registerPage('projects', {
     html: 'projects.html',
@@ -289,4 +288,15 @@ function ensureImportInput(scope) {
     _importInput.hidden = true;
     document.body.appendChild(_importInput);
     return _importInput;
+}
+
+// Model names and topics reach innerHTML from imported Arena exports, so they
+// are untrusted input. Same helper editor.js and render.js each carry.
+function escapeHtml(s) {
+    if (!s) return '';
+    return s.toString()
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 }
