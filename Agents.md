@@ -135,10 +135,17 @@ Multiple `memory.store` calls per topic are expected — store aggressively. Pre
 - **Topic is the seed:** `messages[0]` from Arena exports (speaker `moderator`, content prefixed `Topic:`) is the human-authored seed prompt. It is spoken verbatim with the `Topic:` prefix on the `topic` slide. `arenaData.topic` / `summary.title` are AI-generated downstream summaries and must NOT be used as the topic.
 
 ### Runtime / Storage
-- **Server:** `server/server.js` at `http://localhost:3600`.
+- **Server:** `server/server.js` at `http://localhost:3600`. Run with `node server.js` from `server/`.
+- **The slideshow server is a standalone local app, not a lab service — start, stop and restart it freely.** The "never restart services" rule covers nSpeech, nVoice, the Gateway, the MCP server, nPort, nMedia and the other lab services. This repo's own server is excluded: it is a dev process owned by the user, and it must be restarted after any change to `server/server.js` or `web/js/**`, or the browser keeps talking to code that no longer exists on disk. Node reads a module once, at start, so editing a file changes nothing for a running process.
+- **Before debugging any server-side behaviour, check the running process is current.** `Get-Process -Id (Get-NetTCPConnection -LocalPort 3600 -State Listen).OwningProcess` gives the start time; compare it against the mtime of `server/server.js`. A process older than the file is running stale code, and the symptom is always an error that cannot be found in the source. This cost a full debugging session on 2026-09-30: the file was correct, the process was 43 minutes behind it, and the reported error ("para is not defined") referred to a line that had already been fixed on disk.
 - **Audio binaries:** Stored in nDB file bucket `rendered_slides` as `audioRef`/`audioUrl` on each paragraph. nDB deduplicates by SHA-256 content hash.
 - **nDB:** Append-style JSONL project persistence. v1.5.0 — see "nDB Submodule" and "nDB Exception Contract" above before touching any `db.*` call.
 - **nSpeech / nVoice:** External services via `NSPEECH_URL` and `NVOICE_URL`. Current local development uses **HTTP** `http://192.168.0.100:2244` for nVoice (self-signed HTTPS stopped working with Node v24's `fetch`).
+
+### Shell discipline (Windows PowerShell 5.1)
+- **Never pipe a command's output into a buffering filter.** `| Select-Object -Last 30`, `| Select-Object -First`, and `> file` all wait for the stream to close. Anything that keeps a stream open — a server, a watcher, any process spawned in the same shell — will hang until the tool times out. Write to a file with `>` and read the file in a separate command, or use `--no-pager` / `-NoNewWindow` and let the process return.
+- **A timeout is not a failure.** It is usually the above. Check whether a background terminal was created and read it, or kill it, before retrying a different command.
+- **Compare and inspect with a tool, not with your eyes.** Encoding and mojibake make content comparisons unreliable; print a hash, a length or a `git diff --summary` instead.
 
 ### Recent Features (committed and pushed)
 - **Stop Render All:** Server-side `AbortController` per project, client Stop button in `web/pages/render.html` + `web/js/pages/render.js`, endpoint `POST /api/v3/render-stop/:id`. Commit `a87c0e1`.
