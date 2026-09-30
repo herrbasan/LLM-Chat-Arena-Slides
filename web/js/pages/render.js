@@ -1918,14 +1918,20 @@ nui.registerPage('render', {
         }
         loadSlide(0);
 
-        // Router lifecycle: the page is cached (init() runs once).
-        // The router calls element.show(params) on every navigation.
-        // Always reload the project from the server so changes made on
-        // other pages (e.g. voice mapping in the editor) are reflected.
-        element.show = (newParams) => {
-            const newProjectId = newParams?.id || projectId;
-            const changedProject = newProjectId !== projectId;
-            projectId = newProjectId;
+        // Project switching goes through two doors — see the matching note in
+        // editor.js. The page element is cached per route TYPE and the route
+        // is `#page=render&id=<project>`, so every project resolves to the
+        // same element, and the router only calls show() when that element
+        // changes. Switching project without leaving this page therefore never
+        // reached show(), and the deck on screen kept being the old one.
+        //
+        // show() covers leave-and-return; hashchange covers switch-in-place.
+        // Both call enterRoute(), whose id check makes the second caller a
+        // no-op.
+        function enterRoute(newProjectId) {
+            const targetId = newProjectId || projectId;
+            const changedProject = targetId !== projectId;
+            projectId = targetId;
             audio.pause();
             audio.src = '';
             isPlaying = false;
@@ -1936,6 +1942,8 @@ nui.registerPage('render', {
                 currentParaIdx = -1;
                 v3CumulativeMs = 0;
             }
+            // Always reload from the server so changes made on other pages
+            // (e.g. voice mapping in the editor) are reflected.
             loadProject(projectId).then(() => {
                 if (!deck) return;
                 if (isV3) {
@@ -1947,7 +1955,17 @@ nui.registerPage('render', {
                 }
                 loadSlide(changedProject ? 0 : currentSlideIdx);
             });
-        };
+        }
+
+        element.show = (newParams) => enterRoute(newParams?.id);
+
+        window.addEventListener('hashchange', () => {
+            // Scoped to this page: the editor route carries an id too, and this
+            // page must not react to the editor's navigation.
+            if (!location.hash.includes('page=render')) return;
+            const m = location.hash.match(/[?&]id=([^&]+)/);
+            if (m) enterRoute(decodeURIComponent(m[1]));
+        });
     }
 });
 

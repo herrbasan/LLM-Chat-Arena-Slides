@@ -911,25 +911,55 @@ When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, e
         // ─── Initial Render ───────────────────────────────────
         renderSlides();
 
-        // Router lifecycle: the page is cached (init() runs once).
-        // The router calls element.show(params) on every navigation,
-        // so we hook it to reload the project when the URL changes.
-        element.show = (newParams) => {
-            if (newParams && newParams.id && newParams.id !== projectId) {
-                // Clear chat history on project switch
-                if (chatHistory) chatHistory.innerHTML = '';
-                // Reset chat messages for the new project
-                chatMessages = [
-                    {
-                        role: 'system',
-                        content: `You are the Slideshow Director. You help edit slide decks for TTS narration.
+        // Project switching has to be handled through two doors.
+        //
+        // The page element is cached per route TYPE, and the route is
+        // `#page=editor&id=<project>` — so every project resolves to the same
+        // element. The router only calls show() when the element itself
+        // changes, which means show() never fires when you switch project
+        // while already on the editor: the deck, the slides and the voice
+        // panel all keep showing the previous project. Leaving the editor and
+        // coming back works, because then the element does change.
+        //
+        // So: show() covers the leave-and-return path, hashchange covers the
+        // switch-in-place path. Both funnel through switchProject(), and its
+        // id check makes the second caller a no-op, so whichever fires first
+        // wins and nothing loads twice.
+        function switchProject(newId) {
+            if (!newId || newId === projectId) return;
+            // Clear chat history on project switch
+            if (chatHistory) chatHistory.innerHTML = '';
+            // Reset chat messages for the new project
+            chatMessages = [
+                {
+                    role: 'system',
+                    content: `You are the Slideshow Director. You help edit slide decks for TTS narration.
 You have tools: slideshow_get_source, slideshow_get_deck, slideshow_insert_slide, slideshow_update_slide.
 When asked to make changes, USE THE TOOLS. Clean text for TTS: strip markdown, expand contractions, no asterisks.`
-                    }
-                ];
-                loadProject(newParams.id).then(ok => { if (ok) renderSlides(); });
-            }
-        };
+                }
+            ];
+            loadProject(newId).then(ok => {
+                if (!ok) return;
+                renderSlides();
+                // The voice panel's row labels come from
+                // deck.source.participants and its selected values from
+                // deck.voiceMapping, so it is project-specific state too —
+                // re-rendering only the slides left the previous project's
+                // model names and voices on screen.
+                renderVoicePanel();
+                bindVoicePanelListeners();
+            });
+        }
+
+        element.show = (newParams) => switchProject(newParams && newParams.id);
+
+        window.addEventListener('hashchange', () => {
+            // Scoped to this page: #page=render&id=… also carries an id, and
+            // the editor must not react to the render page's navigation.
+            if (!location.hash.includes('page=editor')) return;
+            const m = location.hash.match(/[?&]id=([^&]+)/);
+            if (m) switchProject(decodeURIComponent(m[1]));
+        });
     }
 });
 
