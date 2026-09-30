@@ -138,6 +138,32 @@ nui-button[data-step].is-active .stepper-num {
     min-width: 0;
 }
 
+/* Height of the participants line. Matches nui-badge's rendered height
+ * (12px font + 4px padding top and bottom = 21.33px), rounded up. Defined
+ * once here so the reserved space cannot drift from the badge. */
+:root {
+    --project-models-line: 22px;
+}
+
+/* The two Arena participants.
+ *
+ * The line is ALWAYS rendered (empty when a deck has no participants) and is
+ * a single fixed-height line, so a deck with two models, one, or none all
+ * occupy the same three lines and every row in the list is the same height.
+ * Wrapping is deliberately off: a third line of badges is the one thing that
+ * would make a row taller than its neighbours, and a model name that will not
+ * fit ellipsises rather than pushing the row out of alignment. */
+.project-row-models {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: var(--nui-space-half);
+    margin-top: var(--nui-space-half);
+    height: var(--project-models-line);
+    overflow: hidden;
+}
+
+/* Same for the caption: always present, one line, ellipsised. */
 .project-row-title {
     font-weight: bold;
     margin-bottom: 2px;
@@ -149,16 +175,9 @@ nui-button[data-step].is-active .stepper-num {
 .project-row-meta {
     font-size: var(--font-size-xsmall);
     color: var(--text-color-dim);
-}
-
-/* The two Arena participants. Wraps rather than truncates: a model name is
- * the main way to tell two otherwise identical conversations apart, so
- * cutting one off defeats the purpose. */
-.project-row-models {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--nui-space-half);
-    margin-top: var(--nui-space-half);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* Render-state badge sits beside the delete button, right-aligned. */

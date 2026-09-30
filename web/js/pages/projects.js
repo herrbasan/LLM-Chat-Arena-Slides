@@ -72,7 +72,7 @@ nui.registerPage('projects', {
                     <div class="project-row-meta">
                         ${item.dateDisplay} — ${item.subtitle || (item.slides + ' slides')}
                     </div>
-                    ${models.length ? `<div class="project-row-models">${models.map(m => `<nui-badge>${escapeHtml(m)}</nui-badge>`).join('')}</div>` : ''}
+                    ${models.length ? `<div class="project-row-models">${models.map(m => `<nui-badge>${escapeHtml(m)}</nui-badge>`).join('')}</div>` : '<div class="project-row-models"></div>'}
                 </div>
                 <div class="project-row-side">
                     <nui-badge variant="${badge.variant}" title="${badge.title}">${badge.label}</nui-badge>
