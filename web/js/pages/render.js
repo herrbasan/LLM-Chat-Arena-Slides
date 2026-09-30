@@ -187,7 +187,7 @@ nui.registerPage('render', {
                 slides.push({
                     type: 'setup',
                     text: 'Setup',
-                    narration: "You're about to hear a conversation between two language models. They were given a single prompt — a topic — and then left to respond to each other directly, with no further human involvement. What follows is unedited and unsteered. The models chose every word themselves.",
+                    narration: "You're about to hear a conversation between two language models. They were given a single prompt — a topic — and then left to respond to each other directly, with no further human involvement. The models chose every word themselves, including the names they call themselves and each other. Those names rarely match the endpoints named on the next slide — the two are wired directly, with nothing in between. Nothing here has been edited or steered.",
                     speaker: 'narrator',
                     _virtual: true
                 });
