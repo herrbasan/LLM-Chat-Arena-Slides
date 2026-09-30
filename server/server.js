@@ -706,26 +706,76 @@ app.put('/api/settings', (req, res) => {
     res.json(getPublicSettings(isApiKeyPatch));
 });
 
+// Render fields a paragraph owns once audio exists. A save that leaves the
+// text alone must not lose these.
+const RENDER_FIELDS = [
+    'audioRef', 'audioUrl', 'renderHash', 'voice', 'speed', 'byteLength',
+    'words', 'durationMs', 'alignComplete', 'alignVersion', 'alignError', 'ttsError'
+];
+
+// Reconcile the client's paragraphs against the stored ones.
+//
+// The editor holds the whole deck in memory from the moment it loaded, so a
+// save after a render elsewhere PUTs a document that predates the render. That
+// silently blanked every audioRef, and the gcBuckets() sweep in the save route
+// then trashed files that were still perfectly valid — one typo fixed cost a
+// full re-render.
+//
+// The stored document is therefore authoritative for render state: for each
+// incoming paragraph, if the stored paragraph at the same position has the
+// same text, carry its render fields across. A paragraph whose text actually
+// changed keeps the incoming (empty) render fields, which is the intended
+// meaning of an edit.
+function mergeRenderState(incoming, stored) {
+    if (!Array.isArray(incoming?.messages) || !Array.isArray(stored?.messages)) return incoming;
+
+    const storedByIndex = new Map();
+    stored.messages.forEach((m, i) => storedByIndex.set(i, m));
+
+    let carried = 0, dropped = 0;
+    incoming.messages.forEach((msg, mi) => {
+        const prev = storedByIndex.get(mi);
+        if (!prev || !Array.isArray(msg?.paragraphs) || !Array.isArray(prev.paragraphs)) return;
+        // A speaker mismatch means the messages are not aligned at all; do not
+        // pair them up, that would graft one voice's audio onto another.
+        if (msg.speaker !== prev.speaker) return;
+        if (msg.paragraphs.length !== prev.paragraphs.length) return;
+
+        msg.paragraphs.forEach((p, pi) => {
+            const old = prev.paragraphs[pi];
+            if (!old || old.text !== p.text) return;
+            let restored = false;
+            for (const f of RENDER_FIELDS) {
+                if (p[f] === undefined && old[f] !== undefined) { p[f] = old[f]; restored = true; }
+            }
+            if (restored) carried++; else dropped++;
+        });
+    });
+
+    if (carried > 0) console.log(`[Save] carried render state for ${carried} unchanged paragraph(s)`);
+    return incoming;
+}
+
 app.put('/api/projects/:id', (req, res) => {
     const existing = findProject(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Project not found' });
 
+    const body = mergeRenderState({ ...req.body }, existing);
+
     const updated = {
         ...existing,
-        ...req.body,
+        ...body,
         _id: req.params.id,
         updatedAt: Date.now()
     };
     // Preserve version from existing if not in body
-    if (!req.body.version && existing.version) {
+    if (!body.version && existing.version) {
         updated.version = existing.version;
     }
     db.update(req.params.id, updated);
 
-    // GC orphan audio: after the client strips cached TTS data (e.g.
-    // via the editor's Edit Message dialog, which replaces paragraphs
-    // with fresh `{ text }` objects), the old audioRefs are gone from
-    // the document. nDB's gcBuckets() sweeps all unreferenced files.
+    // GC orphan audio. Only genuinely-unreferenced files are swept, and
+    // gcBuckets() moves them to the file trash rather than deleting them.
     gcAudio();
 
     res.json({ status: 'updated' });
