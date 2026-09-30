@@ -480,6 +480,69 @@ window.SLIDESHOW_CONFIG = {
     res.send(configScript);
 });
 
+// ─── Render completeness (for the projects list) ────────────────
+//
+// The list shows whether a project's audio is actually usable, so this must
+// agree with the render page's own judgement rather than approximate it.
+// It therefore reuses computeRenderHash() and the identical speakability test
+// (/[\p{L}\p{N}]/u) that pipeline/render use — a looser check here would show
+// a deck as "ready" that the render page then refuses to play.
+//
+// The per-paragraph verdict is the same three-way one the render page uses:
+//   fresh      — hash matches the current voice config, audio present, aligned
+//   stale      — audio exists but the hash drifted (text or voice changed)
+//   unrendered — no audio and no hash at all
+// A project is 'partial' when its speakable paragraphs disagree, which is the
+// common case mid-render and the case worth surfacing.
+function summarizeRenderState(doc) {
+    if (doc.version !== 3 || !Array.isArray(doc.messages)) {
+        return { state: 'unknown', total: 0, fresh: 0, stale: 0, unrendered: 0 };
+    }
+
+    let total = 0, fresh = 0, stale = 0, unrendered = 0;
+    for (const msg of doc.messages) {
+        const role = msg.speaker || 'narrator';
+        const vc = doc.voiceMapping?.[role] || doc.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
+        for (const para of msg.paragraphs || []) {
+            if (!para.text || !/[\p{L}\p{N}]/u.test(para.text)) continue; // unspeakable
+            total++;
+            const hasAudio = !!(para.audioRef || para.audioUrl);
+            if (!hasAudio && !para.renderHash) { unrendered++; continue; }
+            const expected = computeRenderHash(para.text, vc.voice, vc.speed, vc.engine);
+            if (para.renderHash === expected && hasAudio && (para.words?.length || 0) > 0) fresh++;
+            else stale++;
+        }
+    }
+
+    // 'stale' and 'unrendered' stay distinct, matching the render page's own
+    // status vocabulary. They call for the same action (re-render) but not the
+    // same diagnosis: stale means audio is on disk and the voice or text moved
+    // under it, unrendered means there is nothing to play at all. Collapsing
+    // them would also mislabel a deck whose paragraphs are ALL stale as
+    // "partly rendered", when none of it is actually rendered.
+    let state;
+    if (total === 0) state = 'none';
+    else if (fresh === total) state = 'ready';
+    else if (fresh === 0 && stale === 0) state = 'unrendered';
+    else if (fresh === 0) state = 'stale';
+    else state = 'partial';
+
+    return { state, total, fresh, stale, unrendered };
+}
+
+// The two models in the conversation. source.participants is the Arena
+// export's own record of who was in the room — the authoritative answer.
+// voiceMapping[role].label mirrors it and is the fallback for documents
+// imported before participants was captured. The narrator is excluded: it is
+// this app's synthetic voice, not a participant.
+function participantModels(doc) {
+    const fromSource = doc.source?.participants;
+    if (Array.isArray(fromSource) && fromSource.length > 0) return fromSource;
+    return ['participantA', 'participantB']
+        .map(role => doc.voiceMapping?.[role]?.label)
+        .filter(Boolean);
+}
+
 // APIs
 app.get('/api/projects', async (req, res) => {
     try {
@@ -487,10 +550,17 @@ app.get('/api/projects', async (req, res) => {
         // app_settings record sits in this same collection, so it has to be
         // filtered out here or the browser renders it as an empty project card.
         const all = await db.query({});
-        const projects = all.filter(doc => doc._type !== SETTINGS_TYPE);
-        // NOTE: these are full documents, not metadata (the list is ~1.3 MB
-        // for three decks). nDB 1.5.0's queryPage(ast, opts, fields) projects
-        // server-side if that ever needs trimming.
+        const projects = all
+            .filter(doc => doc._type !== SETTINGS_TYPE)
+            .map(doc => ({
+                ...doc,
+                models: participantModels(doc),
+                renderState: summarizeRenderState(doc),
+            }));
+        // NOTE: still full documents, not metadata (~1.3 MB for three decks).
+        // nDB 1.5.0's queryPage(ast, opts, fields) projects server-side; the
+        // client only needs a fixed field set, so that is the next step if
+        // the list ever grows past a handful of decks.
         res.json({ projects });
     } catch (err) {
         res.status(500).json({ error: err.message });

@@ -1,4 +1,5 @@
 import { nui } from '/nui/nui.js';
+import { escapeHtml } from '../lib/html.js';
 
 nui.registerPage('projects', {
     html: 'projects.html',
@@ -20,19 +21,56 @@ nui.registerPage('projects', {
             return d.toLocaleDateString('en-GB', { year: 'numeric', month: 'short', day: 'numeric' });
         }
 
+        // Render state comes from the server (GET /api/projects), which
+        // computes it with the same hash the render page uses. The client
+        // must not re-derive freshness from paragraph fields — a second
+        // implementation is a second opinion, and the two would drift.
+        const RENDER_BADGE = {
+            ready:      { variant: 'success', label: 'Audio ready' },
+            partial:    { variant: 'warning', label: 'Partly rendered' },
+            stale:      { variant: 'warning', label: 'Needs re-render' },
+            unrendered: { variant: 'default', label: 'No audio' },
+            none:       { variant: 'default', label: 'Nothing to speak' },
+            unknown:    { variant: 'default', label: 'Legacy deck' },
+        };
+
+        function describeRenderState(rs) {
+            if (!rs) return RENDER_BADGE.unknown;
+            const badge = RENDER_BADGE[rs.state] || RENDER_BADGE.unknown;
+            if (rs.state === 'ready') {
+                return { ...badge, title: `All ${rs.total} paragraphs rendered and aligned` };
+            }
+            if (rs.state === 'partial') {
+                return { ...badge, title: `${rs.fresh} of ${rs.total} paragraphs rendered and aligned` };
+            }
+            if (rs.state === 'stale') {
+                return { ...badge, title: `All ${rs.total} paragraphs have audio, but the voice or text changed since — re-render to refresh` };
+            }
+            if (rs.state === 'unrendered') {
+                return { ...badge, title: `${rs.total} speakable paragraphs, none rendered yet` };
+            }
+            return { ...badge, title: rs.total ? `${rs.total} speakable paragraphs` : 'No speakable paragraphs' };
+        }
+
         function renderProjectRow(item) {
             const el = document.createElement('div');
             el.className = 'project-row';
+            const models = (item.models || []).filter(Boolean);
+            const badge = describeRenderState(item.renderState);
             el.innerHTML = `
                 <div class="project-card-body" data-project-id="${item.id}">
                     <div class="project-row-title">${item.title}</div>
                     <div class="project-row-meta">
                         ${item.dateDisplay} — ${item.subtitle || (item.slides + ' slides')}
                     </div>
+                    ${models.length ? `<div class="project-row-models">${models.map(m => `<nui-badge>${escapeHtml(m)}</nui-badge>`).join('')}</div>` : ''}
                 </div>
-                <nui-button variant="icon" data-delete-id="${item.id}">
-                    <button type="button" aria-label="Delete project"><nui-icon name="delete"></nui-icon></button>
-                </nui-button>
+                <div class="project-row-side">
+                    <nui-badge variant="${badge.variant}" title="${badge.title}">${badge.label}</nui-badge>
+                    <nui-button variant="icon" data-delete-id="${item.id}">
+                        <button type="button" aria-label="Delete project"><nui-icon name="delete"></nui-icon></button>
+                    </nui-button>
+                </div>
             `;
             el.querySelector('[data-project-id]').addEventListener('click', (ev) => {
                 ev.stopPropagation();
@@ -67,7 +105,13 @@ nui.registerPage('projects', {
         let lastProjectsFingerprint = '';
 
         function fingerprintProjects(projects) {
-            return projects.map(p => `${p._id}:${p.updatedAt || p.createdAt || 0}`).join('|');
+            // renderState belongs in here: a deck rendered in another tab
+            // changes updatedAt, but a stale → ready transition is exactly
+            // what the badge exists to show, and skipping the rebuild would
+            // leave it lying.
+            return projects.map(p =>
+                `${p._id}:${p.updatedAt || p.createdAt || 0}:${p.renderState?.state || '-'}:${(p.models || []).join('+')}`
+            ).join('|');
         }
 
         async function loadProjects() {
@@ -103,6 +147,11 @@ nui.registerPage('projects', {
                         isV3,
                         msgCount,
                         paraCount,
+                        // Both computed server-side — see the notes on
+                        // renderProjectRow() for why the client must not
+                        // derive these itself.
+                        models: p.models || [],
+                        renderState: p.renderState || null,
                         subtitle: isV3
                             ? `${msgCount} messages · ${paraCount} paragraphs`
                             : `${slideCount} slides`,

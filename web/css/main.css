@@ -151,6 +151,24 @@ nui-button[data-step].is-active .stepper-num {
     color: var(--text-color-dim);
 }
 
+/* The two Arena participants. Wraps rather than truncates: a model name is
+ * the main way to tell two otherwise identical conversations apart, so
+ * cutting one off defeats the purpose. */
+.project-row-models {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--nui-space-half);
+    margin-top: var(--nui-space-half);
+}
+
+/* Render-state badge sits beside the delete button, right-aligned. */
+.project-row-side {
+    display: flex;
+    align-items: center;
+    gap: var(--nui-space-half);
+    flex-shrink: 0;
+}
+
 .projects-load-error {
     padding: var(--nui-space);
     color: var(--color-danger);
