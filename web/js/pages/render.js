@@ -393,6 +393,13 @@ nui.registerPage('render', {
             const hasAudio = !!(para.audioRef || para.audioUrl);
             const hasHash = !!para.renderHash;
             if (!hasAudio && !hasHash) return 'unrendered';
+            // A stored ttsError means generation was ATTEMPTED and FAILED —
+            // there is no audio behind this, so calling it "stale" (which
+            // implies audio exists and merely needs refreshing) sends you
+            // looking for a re-render that is not the problem. The hash is
+            // written before TTS is attempted, which is why a failed
+            // paragraph has a hash but no audio and used to land here.
+            if (para.ttsError && !hasAudio) return 'failed';
             const expectedHash = computeRenderHash(para.text, voiceConfig.voice, voiceConfig.speed, voiceConfig.engine);
             const isFresh = para.renderHash === expectedHash && hasAudio && (para.words?.length || 0) > 0;
             return isFresh ? 'fresh' : 'stale';
@@ -406,11 +413,12 @@ nui.registerPage('render', {
             for (const para of paragraphs) {
                 if (!para.text || !/[\p{L}\p{N}]/u.test(para.text)) continue;
                 const status = computeParagraphStatus(para, voiceConfig);
-                if (status === 'stale') {
+                if (status === 'stale' || status === 'failed') {
                     if (para.ttsError) return `TTS failed: ${para.ttsError}`;
                     if (para.alignError) return `Alignment failed: ${para.alignError}`;
                     if ((para.byteLength || 0) === 0 && (para.audioRef || para.audioUrl)) return 'TTS produced empty audio — retry';
                     if ((para.words?.length || 0) === 0 && (para.audioRef || para.audioUrl)) return 'Audio rendered but not aligned — retry';
+                    if (status === 'failed') return 'Generation failed — re-render';
                     return 'Text or voice changed since last render';
                 }
                 if (status === 'unrendered') {
@@ -423,6 +431,10 @@ nui.registerPage('render', {
 
         function aggregateStatus(statuses) {
             if (statuses.length === 0) return 'unrendered';
+            // A failure outranks staleness: a message containing one failed
+            // paragraph needs its generation fixed, and burying that under
+            // "stale" is what made 68 TTS 429s read as a refresh problem.
+            if (statuses.some(s => s === 'failed')) return 'failed';
             if (statuses.some(s => s === 'stale')) return 'stale';
             if (statuses.some(s => s === 'unrendered')) return 'unrendered';
             return 'fresh';
@@ -900,13 +912,14 @@ nui.registerPage('render', {
                 return;
             }
 
-            const counts = { fresh: 0, stale: 0, unrendered: 0, rendering: renderingSlides.size };
+            const counts = { fresh: 0, stale: 0, unrendered: 0, failed: 0, rendering: renderingSlides.size };
             slides.forEach(s => { counts[computeStaleness(s)]++; });
 
             const statusLabel = {
                 fresh: 'ready',
                 stale: 'stale',
                 unrendered: 'unrendered',
+                failed: 'failed',
                 rendering: 'rendering…'
             };
             const statusDot = (s) => `<span class="render-status-dot ${s}">
@@ -917,6 +930,7 @@ nui.registerPage('render', {
             renderStatus.innerHTML = `
                 <div class="render-status-row">
                     ${counts.fresh ? statusDot('fresh') : ''}
+                    ${counts.failed ? statusDot('failed') : ''}
                     ${counts.stale ? statusDot('stale') : ''}
                     ${counts.unrendered ? statusDot('unrendered') : ''}
                     ${counts.rendering ? statusDot('rendering') : ''}

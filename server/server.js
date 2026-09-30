@@ -488,18 +488,20 @@ window.SLIDESHOW_CONFIG = {
 // (/[\p{L}\p{N}]/u) that pipeline/render use — a looser check here would show
 // a deck as "ready" that the render page then refuses to play.
 //
-// The per-paragraph verdict is the same three-way one the render page uses:
+// The per-paragraph verdict is the same four-way one the render page uses:
 //   fresh      — hash matches the current voice config, audio present, aligned
 //   stale      — audio exists but the hash drifted (text or voice changed)
-//   unrendered — no audio and no hash at all
+//   failed     — generation was attempted and errored (TTS 429, empty audio);
+//                there is no audio at all
+//   unrendered — never attempted: no audio and no hash
 // A project is 'partial' when its speakable paragraphs disagree, which is the
 // common case mid-render and the case worth surfacing.
 function summarizeRenderState(doc) {
     if (doc.version !== 3 || !Array.isArray(doc.messages)) {
-        return { state: 'unknown', total: 0, fresh: 0, stale: 0, unrendered: 0 };
+        return { state: 'unknown', total: 0, fresh: 0, stale: 0, unrendered: 0, failed: 0 };
     }
 
-    let total = 0, fresh = 0, stale = 0, unrendered = 0;
+    let total = 0, fresh = 0, stale = 0, unrendered = 0, failed = 0;
     for (const msg of doc.messages) {
         const role = msg.speaker || 'narrator';
         const vc = doc.voiceMapping?.[role] || doc.voiceMapping?.narrator || { voice: 'en-US-Male', speed: 1.0 };
@@ -508,26 +510,31 @@ function summarizeRenderState(doc) {
             total++;
             const hasAudio = !!(para.audioRef || para.audioUrl);
             if (!hasAudio && !para.renderHash) { unrendered++; continue; }
+            // A stored ttsError with no audio behind it is a FAILED
+            // generation, not stale audio. The hash is written before TTS runs,
+            // so a failure lands here with a hash and no audio and used to be
+            // counted as stale — the same misreading the render page had.
+            if (para.ttsError && !hasAudio) { failed++; continue; }
             const expected = computeRenderHash(para.text, vc.voice, vc.speed, vc.engine);
             if (para.renderHash === expected && hasAudio && (para.words?.length || 0) > 0) fresh++;
             else stale++;
         }
     }
 
-    // 'stale' and 'unrendered' stay distinct, matching the render page's own
-    // status vocabulary. They call for the same action (re-render) but not the
-    // same diagnosis: stale means audio is on disk and the voice or text moved
-    // under it, unrendered means there is nothing to play at all. Collapsing
-    // them would also mislabel a deck whose paragraphs are ALL stale as
+    // These stay distinct rather than collapsing into one "needs work" bucket,
+    // because they call for the same action (re-render) but not the same
+    // diagnosis: stale means audio is on disk and the voice or text moved under
+    // it, failed means nothing was generated, unrendered means never attempted.
+    // Collapsing them also mislabels a deck whose paragraphs are ALL stale as
     // "partly rendered", when none of it is actually rendered.
     let state;
     if (total === 0) state = 'none';
     else if (fresh === total) state = 'ready';
-    else if (fresh === 0 && stale === 0) state = 'unrendered';
-    else if (fresh === 0) state = 'stale';
+    else if (fresh === 0 && stale === 0) state = (failed > 0 ? 'failed' : 'unrendered');
+    else if (fresh === 0) state = (stale > 0 ? 'stale' : 'failed');
     else state = 'partial';
 
-    return { state, total, fresh, stale, unrendered };
+    return { state, total, fresh, stale, unrendered, failed };
 }
 
 // The two models in the conversation. source.participants is the Arena

@@ -28,6 +28,7 @@ nui.registerPage('projects', {
             ready:      { variant: 'success', label: 'Audio ready' },
             partial:    { variant: 'warning', label: 'Partly rendered' },
             stale:      { variant: 'warning', label: 'Needs re-render' },
+            failed:     { variant: 'danger',  label: 'Generation failed' },
             unrendered: { variant: 'default', label: 'No audio' },
             none:       { variant: 'default', label: 'Nothing to speak' },
             unknown:    { variant: 'default', label: 'Legacy deck' },
@@ -40,10 +41,19 @@ nui.registerPage('projects', {
                 return { ...badge, title: `All ${rs.total} paragraphs rendered and aligned` };
             }
             if (rs.state === 'partial') {
-                return { ...badge, title: `${rs.fresh} of ${rs.total} paragraphs rendered and aligned` };
+                // Name the failures explicitly — a mixed deck where some
+                // paragraphs never generated is a different problem from one
+                // that merely needs refreshing.
+                const failed = rs.failed
+                    ? `, ${rs.failed} failed to generate`
+                    : '';
+                return { ...badge, title: `${rs.fresh} of ${rs.total} paragraphs rendered and aligned${failed}` };
             }
             if (rs.state === 'stale') {
                 return { ...badge, title: `All ${rs.total} paragraphs have audio, but the voice or text changed since — re-render to refresh` };
+            }
+            if (rs.state === 'failed') {
+                return { ...badge, title: `Generation failed for ${rs.failed} of ${rs.total} paragraphs — usually a TTS rate limit. Re-render.` };
             }
             if (rs.state === 'unrendered') {
                 return { ...badge, title: `${rs.total} speakable paragraphs, none rendered yet` };

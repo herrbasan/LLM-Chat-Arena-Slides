@@ -1103,6 +1103,11 @@ body.render-recording #player-slide-content {
 
 .render-status-dot.fresh .render-status-dot__mark { background: var(--color-highlight); }
 .render-status-dot.stale .render-status-dot__mark { background: #d4a017; }
+/* A failure is not a staleness: nothing was generated at all, so it gets the
+ * danger colour rather than the amber one, and the label text is not dimmed —
+ * this is the state that means "go look at the error", not "refresh me". */
+.render-status-dot.failed .render-status-dot__mark { background: var(--color-danger); }
+.render-status-dot.failed { color: var(--color-danger); }
 .render-status-dot.unrendered .render-status-dot__mark { background: var(--text-color-dim); }
 .render-status-dot.rendering .render-status-dot__mark {
     background: #4a9eff;
