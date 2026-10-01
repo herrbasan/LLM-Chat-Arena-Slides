@@ -129,6 +129,31 @@ Multiple `memory.store` calls per topic are expected — store aggressively. Pre
 - **Skip contract:** paragraphs failing `/[\p{L}\p{N}]/u` are skipped everywhere — status `skip`, render clears stale render fields and never calls TTS (nSpeech 400s on empty text). Single-paragraph endpoint fails loud (502) on empty TTS audio; alignment gaps always record `alignError` (no silent unaligned state).
 - Verified e2e 2026-08-23: synthetic dirty source, reference export import, live render (audio + alignment + hash match), unspeakable skip. nSpeech gotcha filed as herrbasan/nSpeech#1: TTS returns 200 + empty audio for unknown voice ids.
 
+### Video Recording — parked (2026-10-01)
+- **Not shipped in this repo.** Requirement: every browser frame, 60 Hz, 4K,
+  audio recorded alongside, unattended overnight. Two attempts, both abandoned:
+  - **Offline seek-and-paint renderer** (`server/capture/`, deleted): ~12×
+    faster but drift by construction — a frame schedule plus per-frame duration
+    arithmetic plus separately built audio. Reached 15 s drift.
+  - **Realtime screen capture** (2026-09-30/10-01, space-bunny): the Desktop
+    Duplication recorder works and self-verifies, but it reads the *screen* —
+    the window must be visible and on top, so recording takes over the
+    display. Not a solution for unattended overnight runs. The engine is its
+    own project now: `D:\Work\_GIT\screen-record`. The Arena-side harness
+    (`record-deck.js`), the C# WGC probe and `RECORDING-STATE.md` are archived
+    in that repo's gitignored `_Archive/`.
+- **The web-export player changes from that arc were rolled back (2026-10-01)**
+  — `window.__arena`, `body.arena-capture`, the offline paint core. The player
+  is the plain playback page again.
+- **If ever revisited:** record the app's render page, not `web-export/player/`.
+  The app already has recording mode — `enterRecordingMode()` in
+  `web/js/pages/render.js` (`body.render-recording`, fullscreen,
+  `fitSlideToWidth()` transform-scale, so text rasterises at capture
+  resolution). Port 9333 is nPM's on this machine; use 9334 for CDP.
+- Full requirement, phases and traps: `docs/PLAN-video-rendering.md`.
+  Recorder history: `D:\Work\_GIT\screen-record` (README +
+  `_Archive/RECORDING-STATE.md`).
+
 ### Architecture
 - **Deck version:** 3 (`deck.version === 3`). v3 projects store `messages[]` with `paragraphs[]`; virtual slides are built at runtime in `web/js/pages/render.js` (~600 chars per visual chunk).
 - **Slide type contract:** `setup → details → topic → [conversation...] → end`. The type `title` was renamed to `topic` on 2026-06-10; no `title` type remains in the active flow.

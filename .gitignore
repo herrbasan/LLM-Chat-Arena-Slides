@@ -19,3 +19,10 @@ pipeline/output/
 # Baked web exports (artifacts) and the generated listing
 /web-export/convos/
 /web-export/index.html
+
+# Video render output. A full deck is thousands of captured frames plus an
+# encoded MP4 — build artifacts, never sources.
+# (The recorder lives in its own repo since 2026-10-01:
+# D:\Work\GIT\screen-record; the Arena capture harness is archived there in
+# _Archive/capture/.)
+/captures/

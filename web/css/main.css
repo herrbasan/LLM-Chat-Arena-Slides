@@ -50,10 +50,20 @@ nui-button[data-step].is-active .stepper-num {
 
 /* ─── Projects page ──────────────────────────────────────────── */
 
-/* The page is a single column, full-height below the header. */
+/* The page is a single column, full-height below the header.
+ *
+ * No padding here: `nui-page > *` already applies
+ * `padding: var(--nui-space) var(--nui-space-double)`, so declaring it again
+ * on the page class doubles it — measured 16px on nui-page and 16/32px on this
+ * element, stacking to 32px of vertical gutter.
+ *
+ * No height either. The shell offsets the header
+ * (`nui-content { top: var(--app-header-height) }`) and `nui-main` is
+ * `position:absolute; inset:0` inside it, so `height: 100%` fills the box the
+ * page was given. `calc(100vh - 4rem)` subtracts a header that is already
+ * accounted for. */
 .page-projects {
-    height: calc(100vh - 4rem);
-    padding: var(--nui-space);
+    height: 100%;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
@@ -231,9 +241,10 @@ nui-dialog[mode="page"] .options-source {
  * the slides column stays put. The whole grid fills the viewport
  * minus the header. */
 .page-editor {
-    height: calc(100vh - 4rem);
+    /* 100%, not calc(100vh - 4rem), and no padding — the shell provides both.
+     * See the note on .page-projects for the full reasoning. */
+    height: 100%;
     box-sizing: border-box;
-    padding: var(--nui-space);
 }
 
 .editor-grid {
@@ -886,11 +897,46 @@ nui-dialog[mode="page"] .options-source {
     margin-top: var(--nui-space);
 }
 
+/* ─── Content area sizing ──────────────────────────────────────
+ *
+ * NUI's layout for this is offsets only, no sizes:
+ *   nui-content       { position:absolute; top: var(--app-header-height) }
+ *   nui-content > nui-main { position:absolute; inset:0 }
+ * So nui-main is already correctly sized to the space below the header, and
+ * nothing here should re-derive a height from the viewport.
+ *
+ * What it ships with is `overflow-y: auto`, which is right for genuinely long
+ * pages. The problem is that pages carry padding on top of that box, so a page
+ * whose content plus its own padding exceeds the box makes nui-main scroll even
+ * though nothing is actually cut off — measured 16px on the render page, which
+ * is exactly the page padding. That scrollbar showed up on every tab.
+ *
+ * The fix sits HERE, at the shared container, because that is where the
+ * problem is: pages fill the box they are given instead of overflowing it.
+ * Inner regions that genuinely scroll (slide lists, message lists) already
+ * carry their own overflow and are unaffected.
+ *
+ * Selector matches NUI's own so the specificity wins without !important.
+ */
+nui-app[data-layout="app"] nui-content > nui-main {
+    overflow: hidden;
+}
+
+nui-main > .content-page,
+nui-main > .content-feature {
+    height: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
 /* ─── Render page layout ───────────────────────────────────── */
 
+/* The render page's own block fills the page and nothing more. No padding —
+ * `nui-page > *` already applies it, and declaring it here doubled it. No
+ * height from 100vh either: the shell offsets the header and `nui-main` is
+ * `position:absolute; inset:0`, so `height: 100%` fills the box given. */
 .page-render {
-    height: calc(100vh - 4rem);
-    padding: var(--nui-space);
+    height: 100%;
     box-sizing: border-box;
 }
 
@@ -1067,15 +1113,11 @@ body.render-recording .render-controls {
     display: none;
 }
 body.render-recording .page-render {
+    /* No padding in recording mode: the slide is scaled to fill the frame and
+     * the gutter `nui-page > *` applies would be visible black margin that the
+     * fit does not account for. `#player-container` below carries the margin
+     * the slide is fitted against, and fitSlideToWidth() reads it from there. */
     padding: 0;
-    height: 100vh;
-}
-body.render-recording .render-layout {
-    grid-template-columns: 1fr;
-    height: 100vh;
-}
-body.render-recording .render-player {
-    height: 100vh;
 }
 /* Recording mode: generous margin on all sides so the scaled slide
  * has breathing room. fitSlideToWidth() reads this padding and
@@ -1092,7 +1134,34 @@ body.render-recording .words-container .word {
  * scale it up (transform: scale) so it fills the available horizontal
  * space (minus the player padding) — an automatic replacement for
  * manual browser zoom. overflow: visible lets the scaled slide show
- * beyond the .slide wrapper, centered in the player. */
+ * beyond the .slide wrapper, centered in the player.
+ *
+ * The page itself must not scroll. The scaled slide is larger than its
+ * wrapper by design, so with `overflow: visible` anywhere in the chain
+ * the document grows past the viewport and a scrollbar appears — which
+ * both shows up in the recording and narrows the viewport, so
+ * fitSlideToWidth() computes its scale from a width that is too small.
+ * overflow: hidden on the page clips the scaled slide to the viewport,
+ * and 100% height keeps the chain from accumulating 100vh per level. */
+body.render-recording .page-render,
+body.render-recording .render-layout,
+body.render-recording .render-player {
+    height: 100%;
+    overflow: hidden;
+}
+body.render-recording .render-layout {
+    grid-template-columns: 1fr;
+}
+body.render-recording {
+    /* Black, because the slide is scaled beyond its wrapper and the
+     * area it is scaled over is the page background. Without this the
+     * surrounding area is whatever the app chrome happened to be. */
+    background: #000;
+    overflow: hidden;
+}
+body.render-recording #player-container {
+    background: #000;
+}
 body.render-recording #player-slide-content {
     max-width: 900px;
     overflow: visible;
