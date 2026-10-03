@@ -43,7 +43,7 @@ async function fetchTts(text, voiceConfig, chunkOpts = {}) {
             voice: voiceConfig.voice,
             speed: voiceConfig.speed || 1.0,
             response_format: 'mp3',
-            extra_body: { batch: true, markdown: true, ...chunkOpts }
+            extra_body: { batch: true, markdown: true, language: 'en', ...chunkOpts }
         })
     });
     if (!response.ok) {

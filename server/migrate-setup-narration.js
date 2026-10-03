@@ -1,8 +1,9 @@
 // server/migrate-setup-narration.js
 //
-// One-off. Rewrites the Setup slide's opening in every project to warn the
-// listener that the models name themselves and each other freely, and that
-// those names rarely match the endpoints shown on the next slide.
+// One-off (2026-10-01, final pass). Sets the Setup opening to the minimal
+// original: one sentence, nothing else. The Claude-identity and
+// name-mismatch explanations were cut — explaining the non-interference
+// contract at length reads as defensive; the sentence carries it.
 //
 // The opening exists in THREE places per project, and all three must move
 // together or the deck breaks in a confusing way:
@@ -39,17 +40,17 @@ const REPAIR = process.argv.includes('--repair-caption');
 const DATA = process.env.NDB_DATA_PATH || './data';
 const JSONL_PATH = path.resolve(__dirname, DATA, 'slideshows.jsonl');
 
-const NEW_TAIL = 'Those names rarely match the endpoints named on the next slide';
-const OLD_TAIL = 'What follows is unedited and unsteered. The models chose every word themselves.';
+// Idempotency is EXACT MATCH: the final opening is one sentence, and every
+// earlier generation shares phrases with it ('with no further human
+// involvement' appears in three generations) — a contains-check cannot
+// discriminate. Compare the whole string.
+const OLD_TAIL = 'then stepped back'; // compact-pass marker (informational)
 
 const NEW_OPENING =
     "You're about to hear a conversation between two language models. " +
-    "They were given a single prompt \u2014 a topic \u2014 and then left to " +
-    "respond to each other directly, with no further human involvement. " +
-    "The models chose every word themselves, including the names they call " +
-    "themselves and each other. Those names rarely match the endpoints " +
-    "named on the next slide \u2014 the two are wired directly, with nothing " +
-    "in between. Nothing here has been edited or steered.";
+    "They were given a single prompt \u2014 a topic \u2014 and then left " +
+    "to respond to each other directly, with no further human " +
+    "involvement.";
 
 if (!fs.existsSync(JSONL_PATH)) {
     throw new Error(`Store not found: ${JSONL_PATH}\nNDB_DATA_PATH resolves to ${JSONL_PATH}`);
@@ -70,7 +71,7 @@ const db = nDB.Database.open(JSONL_PATH, { persistence: 'immediate' });
         const para = setup.paragraphs?.[0];
         if (!para) { console.log(`${doc._id}  ${title} — setup has no paragraph, skipped`); skipped++; continue; }
 
-        if (String(para.text || '').includes(NEW_TAIL)) {
+        if (String(para.text || '').trim() === NEW_OPENING) {
             if (REPAIR && String(setup.text || '') !== 'Setup') {
                 if (DRY_RUN) console.log(`${doc._id}  ${title}  would reset caption to 'Setup'`);
                 else {
@@ -89,7 +90,7 @@ const db = nDB.Database.open(JSONL_PATH, { persistence: 'immediate' });
         // pasted into the editor, say) must not be silently overwritten. It
         // starts with the same opening sentence, so match on that alone and
         // report it for the user to decide on.
-        const PREFIX = "You're about to hear a conversation between two language models. They were given a single prompt";
+        const PREFIX = "You're about to hear";
         const isStandardOpening = String(para.text || '').includes(OLD_TAIL) || String(para.text || '').includes(PREFIX);
         if (!isStandardOpening) {
             console.log(`${doc._id}  ${title} — opening was hand-edited, left alone`);

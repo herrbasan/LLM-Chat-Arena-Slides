@@ -41,7 +41,7 @@ Every video opens with three fixed slides. The narrations are a locked contract 
 
 **Setup** — frames the contract:
 
-> "You're about to hear a conversation between two language models. They were given a single prompt — a topic — and then left to respond to each other directly, with no further human involvement. What follows is unedited and unsteered. The models chose every word themselves."
+> "You're about to hear a conversation between two language models. They were given a single prompt — a topic — and then left to respond to each other directly, with no further human involvement."
 
 **Details** — names the participants and the date:
 

@@ -128,13 +128,20 @@ async function buildProject(sourceData, outputDir = null, progress = () => {}, o
     progress = typeof progress === 'function' ? progress : () => {};
     progress('import', `Loaded ${sourceData.messages?.length || 0} messages`, 10);
 
-    // If the input looks like raw Arena JSON (has a moderator message),
-    // parse it through the importer first. This makes buildProject accept
-    // both raw Arena exports and pre-parsed source objects.
+    // Route through the importer unless the input is ALREADY a parsed
+    // source object. The discriminator is the parsed-source marker
+    // (seedPrompt set, or a full project doc with .source) — NOT the
+    // presence of a moderator. Raw exports WITHOUT a moderator exist
+    // (gateway-chat dumps: model-name speakers, no session wrapper, no
+    // topic, no participants); skipping the importer for those loses the
+    // participant/topic derivation and collapses every speaker onto
+    // participantA (2026-10-03, slideshow_XOAjsiXuLwjEJgUU). The
+    // importer's own idempotent guard passes pre-parsed sources through.
     const hasModerator = Array.isArray(sourceData.messages) && sourceData.messages.some(
         m => (m.speaker || '').toLowerCase() === 'moderator'
     );
-    const rawSource = hasModerator ? parseArenaExport(sourceData) : sourceData;
+    const looksParsed = !hasModerator && (sourceData.seedPrompt || sourceData.source);
+    const rawSource = looksParsed ? sourceData : parseArenaExport(sourceData);
 
     // Normalize: accept both raw Arena JSON and pre-parsed source objects.
     const source = {
@@ -145,6 +152,7 @@ async function buildProject(sourceData, outputDir = null, progress = () => {}, o
         exportedAt: rawSource.exportedAt || rawSource.source?.exportedAt || new Date().toISOString(),
         seedPrompt: rawSource.seedPrompt || rawSource.source?.seedPrompt || null,
         seedPromptRaw: rawSource.seedPromptRaw || rawSource.source?.seedPromptRaw || null,
+        sessionTitle: rawSource.sessionTitle || rawSource.source?.sessionTitle || null,
         renderedAt: rawSource.renderedAt || rawSource.source?.renderedAt || null
     };
 

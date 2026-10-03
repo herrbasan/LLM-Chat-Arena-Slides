@@ -115,13 +115,25 @@ function buildOpeningSlides(source) {
     }));
     const renderedAt = source.renderedAt || source.exportedAt;
 
-    return [
+    // The topic slide speaks "the following was the only prompt given to
+    // the models" — that claim is only true when a seed exists. Exports
+    // without a moderator message (early chat-app arena dumps) have no
+    // recorded seed, but they carry the human's topic as session.title
+    // (same field that holds the seed on seeded exports of that era). When
+    // we know the topic but not the verbatim prompt, show it with narration
+    // that claims only what is true. Neither known → no topic slide.
+    const seed = source.seedPromptRaw || source.seedPrompt || null;
+    const sessionTopic = !seed && source.sessionTitle
+        ? String(source.sessionTitle).replace(/^\s*Topic:\s*/i, '').trim()
+        : null;
+
+    const opening = [
         {
             type: 'setup',
             speaker: 'narrator',
             label: 'Narrator',
             text: 'Setup',
-            narration: "You're about to hear a conversation between two language models. They were given a single prompt \u2014 a topic \u2014 and then left to respond to each other directly, with no further human involvement. The models chose every word themselves, including the names they call themselves and each other. Those names rarely match the endpoints named on the next slide \u2014 the two are wired directly, with nothing in between. Nothing here has been edited or steered.",
+            narration: "You're about to hear a conversation between two language models. They were given a single prompt \u2014 a topic \u2014 and then left to respond to each other directly, with no further human involvement.",
             tts: null
         },
         {
@@ -138,7 +150,10 @@ function buildOpeningSlides(source) {
                 turnCount: turnCount
             }
         },
-        {
+    ];
+
+    if (seed) {
+        opening.push({
             type: 'topic',
             speaker: 'narrator',
             label: 'Narrator',
@@ -146,11 +161,26 @@ function buildOpeningSlides(source) {
             // "Topic:" framing word, the one stable human-authored part
             // of the deck. The narration frames the seed as a spoken
             // sentence instead, absorbing the prefix into the colon.
-            text: source.seedPromptRaw || source.seedPrompt || source.topic,
-            narration: `The following was the only prompt given to the models: ${String(source.seedPromptRaw || source.seedPrompt || source.topic).replace(/^\s*Topic:\s*/i, '').trim()}`,
+            text: seed,
+            narration: `The following was the only prompt given to the models: ${String(seed).replace(/^\s*Topic:\s*/i, '').trim()}`,
             tts: null
-        }
-    ];
+        });
+    } else if (sessionTopic) {
+        opening.push({
+            type: 'topic',
+            speaker: 'narrator',
+            label: 'Narrator',
+            // The topic is known (session title) but the verbatim prompt
+            // is not — the narration must not claim otherwise. Display
+            // keeps the title verbatim; speech normalizes "vs." so TTS
+            // reads it as "versus".
+            text: sessionTopic,
+            narration: `The models were given the topic: ${sessionTopic.replace(/\s+vs\.?\s+/gi, ' versus ')}`,
+            tts: null
+        });
+    }
+
+    return opening;
 }
 
 function buildEndSlide() {

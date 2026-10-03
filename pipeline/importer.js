@@ -92,6 +92,12 @@ function parseChatExport(arenaData) {
         id: session.id || 'unknown',
         exportedAt: exportedAt,
         topic: (session.summary && session.summary.title) || 'Untitled Conversation',
+        // The human's topic for the session. On seeded exports this era's
+        // session.title sometimes carries the seed itself ("Topic: …");
+        // on seedless ones it is the only record of what the models were
+        // given. buildOpeningSlides uses it for the topic slide only when
+        // no moderator seed exists.
+        sessionTitle: session.title || null,
         seedPrompt: seedPrompt,
         seedPromptRaw: moderatorMessage ? (moderatorMessage.content || '').trim() : null,
         participants: participants,
@@ -127,6 +133,7 @@ function parseArenaExport(arenaData) {
             id: arenaData.id || arenaData.source?.id || 'unknown',
             exportedAt: arenaData.exportedAt || arenaData.source?.exportedAt || new Date().toISOString(),
             topic: arenaData.topic || arenaData.source?.topic || 'Untitled Conversation',
+            sessionTitle: arenaData.sessionTitle || arenaData.source?.sessionTitle || null,
             seedPrompt: arenaData.seedPrompt,
             seedPromptRaw: arenaData.seedPromptRaw || arenaData.seedPrompt,
             participants: (arenaData.participants || arenaData.source?.participants || []).map(p =>

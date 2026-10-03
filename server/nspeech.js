@@ -25,7 +25,14 @@ async function tts(baseUrl, { text, voice, speed = 1.0, engine = 'nspeech', sign
             input: text,
             voice,
             speed,
-            response_format: 'mp3'
+            response_format: 'mp3',
+            // Language hint — content is English conversation; without it
+            // some engines autodetect and occasionally misread (e.g. as
+            // German, mangling word timing). Engines without language
+            // support ignore the field. NOT part of the render freshness
+            // hash (text+engine+voice+speed), so existing audio stays
+            // fresh and only new renders pick this up.
+            extra_body: { language: 'en' }
         }),
         signal
     });
