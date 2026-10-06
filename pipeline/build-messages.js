@@ -153,6 +153,7 @@ async function buildProject(sourceData, outputDir = null, progress = () => {}, o
         seedPrompt: rawSource.seedPrompt || rawSource.source?.seedPrompt || null,
         seedPromptRaw: rawSource.seedPromptRaw || rawSource.source?.seedPromptRaw || null,
         sessionTitle: rawSource.sessionTitle || rawSource.source?.sessionTitle || null,
+        recordedAt: rawSource.recordedAt || rawSource.source?.recordedAt || null,
         renderedAt: rawSource.renderedAt || rawSource.source?.renderedAt || null
     };
 
@@ -217,6 +218,7 @@ async function buildProject(sourceData, outputDir = null, progress = () => {}, o
         source: {
             arenaExportId: source.id,
             exportedAt: source.exportedAt,
+            recordedAt: source.recordedAt || null,
             topic: source.topic,
             seedPrompt: source.seedPrompt,
             seedPromptRaw: source.seedPromptRaw,

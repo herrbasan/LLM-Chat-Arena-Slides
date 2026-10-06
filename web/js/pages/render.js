@@ -59,7 +59,25 @@ nui.registerPage('render', {
     async init(element, params, nui) {
         await nui.ready();
 
+        // Autonomous recording run: the page drives itself through a deck
+        // queue coordinated via the server's /api/record/* endpoints.
+        // Declared here (not in the recording section below) because the
+        // deck resolution at the top of init() runs first — see Edit A.
+        let autonomousRecording = false;
+        if (isAutonomousRecording()) autonomousRecording = true;
+
         let projectId = params.id || window.SLIDESHOW_APP.currentProject;
+        if (isAutonomousRecording() && !projectId) {
+            // Kiosk launch or crash relaunch: no id in the URL, but the
+            // recording run knows which deck is current.
+            const st = await (await fetch('/api/record/current')).json();
+            if (!st.current) {
+                // NEVER touch document.title in a run: the OBS window
+                // capture binds by exact title, so any change detaches it.
+                throw new Error('[Record] recording=1 in URL but no active recording run — start one with record-queue.mjs');
+            }
+            projectId = st.current.id;
+        }
         if (!projectId) {
             window.location.hash = '#page=projects';
             return;
@@ -179,7 +197,9 @@ nui.registerPage('render', {
                     role: i === 0 ? 'participantA' : 'participantB'
                 }));
                 const turnCount = messages.length;
-                const dateText = formatHumanDate(source.exportedAt) || 'an unknown date';
+                // recordedAt (landmark overlay) is when the conversation
+                // happened; exportedAt is only when the file was written.
+                const dateText = formatHumanDate(source.recordedAt || source.exportedAt) || 'an unknown date';
                 const participantLine = source.participants?.length >= 2
                     ? `${source.participants[0]} and ${source.participants[1]}`
                     : (source.participants?.[0] || 'two language models');
@@ -198,7 +218,7 @@ nui.registerPage('render', {
                     narration: `This recording was generated on ${dateText}, featuring the models ${participantLine}. ${turnCount === 1 ? 'One' : capitalize(spell(turnCount))} turn${turnCount === 1 ? '' : 's'}.`,
                     speaker: 'narrator',
                     meta: {
-                        recordedAt: source.exportedAt,
+                        recordedAt: source.recordedAt || source.exportedAt,
                         renderedAt: source.renderedAt,
                         models,
                         turnCount
@@ -262,7 +282,7 @@ nui.registerPage('render', {
                 role: i === 0 ? 'participantA' : 'participantB'
             }));
             return {
-                recordedAt: source.exportedAt,
+                recordedAt: source.recordedAt || source.exportedAt,
                 renderedAt: source.renderedAt,
                 models,
                 turnCount: (deck.messages || []).filter(m => m.type === 'conversation' || !m.type).length
@@ -1452,11 +1472,12 @@ nui.registerPage('render', {
             updateControls();
             updateProgress(0);
             updateTimeDisplay(0, tts?.durationMs || 0);
-
             // If recording, re-fit the newly-rendered slide to width.
             fitSlideToWidth();
             // Reflect the new current slide in the sidebar selection.
             renderMessageList();
+            // Autonomous run: slide change = progress heartbeat.
+            postRecordingProgress();
         }
 
         function buildWordSpans(text, tts, paragraphs, leadWordCount = 0) {
@@ -1612,6 +1633,83 @@ nui.registerPage('render', {
         // the slides or for a clean presentation view.
         let isRecording = false;
 
+        // ─── Autonomous recording run (queue runner + OBS) ───
+        // Phase flow per deck: idle → waiting-door (painted, ready posted,
+        // waiting for the runner's OBS capture to go live) → playing
+        // (progress pings) → done-wait (last word + post-roll posted,
+        // waiting for the runner to finalize and advance) → navigate.
+        // document.title is deliberately NOT touched during a run: OBS
+        // window capture can match by window title, and a title change
+        // mid-capture can break the source binding.
+        let recordPhase = 'idle';
+        let recordDoorTimer = 0;
+        let recordProgressTimer = 0;
+        const recordPost = (path, body) => fetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+
+        function postRecordingProgress() {
+            if (!autonomousRecording || recordPhase !== 'playing') return;
+            recordPost('/api/record/progress', {
+                projectId,
+                slideIdx: currentSlideIdx,
+                slideCount: deck?.slides?.length ?? 0,
+                paraIdx: currentParaIdx,
+                paraCount: v3Paragraphs.length,
+            }).catch(err => console.warn('[Record] progress ping failed:', err.message));
+        }
+
+        // Called once per deck, after the deck is loaded and painted.
+        function maybeStartRecordingPhase() {
+            if (!autonomousRecording || recordPhase !== 'idle') return;
+            recordPhase = 'waiting-door';
+            enterRecordingMode({ autonomous: true });
+            recordPost('/api/record/ready', { projectId })
+                .then(r => { if (!r.ok) throw new Error(`ready → HTTP ${r.status}`); })
+                .catch(err => { console.error('[Record] ready post failed:', err); });
+
+            clearInterval(recordDoorTimer);
+            recordDoorTimer = setInterval(async () => {
+                try {
+                    const st = await (await fetch('/api/record/state')).json();
+                    if (recordPhase === 'waiting-door' && st.door === true && st.current?.id === projectId) {
+                        recordPhase = 'playing';
+                        if (!audio.src) throw new Error('door opened but no audio src loaded');
+                        audio.play().catch(err => {
+                            console.error('[Record] audio.play() rejected:', err);
+                        });
+                    } else if (recordPhase === 'done-wait' && st.door === false) {
+                        // Capture for this deck is finalized. Whatever is
+                        // current now is what we load next: a new deck id
+                        // (advance), no deck (run finished), or the same id
+                        // (runner retried this deck) — all three reload.
+                        const cur = await (await fetch('/api/record/current')).json();
+                        clearInterval(recordDoorTimer);
+                        if (!cur.current) {
+                            recordPhase = 'complete';
+                            console.log('[Record] run complete — all decks done');
+                            return;
+                        }
+                        const qs = cur.current.id !== projectId
+                            ? `id=${encodeURIComponent(cur.current.id)}&recording=1`
+                            : 'recording=1'; // same deck = retry, resolve via server
+                        // The cache-buster MUST live in the search part: a
+                        // changed search forces a document reload, while a
+                        // changed hash alone is a same-document navigation
+                        // and would leave this page's closure state alive.
+                        location.href = `/?r=${Date.now()}#page=render&${qs}`;
+                    }
+                } catch (err) {
+                    console.error('[Record] door poll failed:', err);
+                }
+            }, 250);
+
+            clearInterval(recordProgressTimer);
+            recordProgressTimer = setInterval(postRecordingProgress, 3000);
+        }
+
         // ─── Fit-to-viewport scaling (recording mode) ───
         // Instead of relying on manual browser zoom, recording mode
         // renders the slide at its natural width then scales it up
@@ -1643,26 +1741,31 @@ nui.registerPage('render', {
             slide.style.transform = `scale(${scale})`;
         }
 
-        async function enterRecordingMode() {
+        // autonomous: the page is running under the queue runner in a kiosk
+        // browser — the kiosk window state IS the fullscreen, so the
+        // gesture-gated Fullscreen API is skipped entirely.
+        async function enterRecordingMode({ autonomous = false } = {}) {
             if (isRecording) return;
             isRecording = true;
             document.body.classList.add('render-recording');
             updateRecordButton();
-            try {
-                // requestFullscreen on the .page-render wrapper so the
-                // background-color of the page extends into the
-                // fullscreen area (otherwise it'd be black).
-                const pageEl = element.querySelector('.page-render');
-                if (pageEl && pageEl.requestFullscreen) {
-                    await pageEl.requestFullscreen();
-                } else if (document.documentElement.requestFullscreen) {
-                    await document.documentElement.requestFullscreen();
+            if (!autonomous) {
+                try {
+                    // requestFullscreen on the .page-render wrapper so the
+                    // background-color of the page extends into the
+                    // fullscreen area (otherwise it'd be black).
+                    const pageEl = element.querySelector('.page-render');
+                    if (pageEl && pageEl.requestFullscreen) {
+                        await pageEl.requestFullscreen();
+                    } else if (document.documentElement.requestFullscreen) {
+                        await document.documentElement.requestFullscreen();
+                    }
+                } catch (err) {
+                    // Fullscreen request can be denied (e.g. not from a
+                    // user gesture in some browsers). Recording mode
+                    // still works without it — the layout is clean.
+                    console.warn('[Record] fullscreen request failed:', err.message);
                 }
-            } catch (err) {
-                // Fullscreen request can be denied (e.g. not from a
-                // user gesture in some browsers). Recording mode
-                // still works without it — the layout is clean.
-                console.warn('[Record] fullscreen request failed:', err.message);
             }
             fitSlideToWidth();
         }
@@ -1700,8 +1803,11 @@ nui.registerPage('render', {
         }
 
         // Sync state if the user presses Esc (or any other browser-
-        // native way of leaving fullscreen).
+        // native way of leaving fullscreen). Skipped in autonomous mode:
+        // there is no fullscreen API element in a kiosk and nothing is
+        // allowed to tear the run down from inside the page.
         document.addEventListener('fullscreenchange', () => {
+            if (autonomousRecording) return;
             if (!document.fullscreenElement && isRecording) {
                 isRecording = false;
                 document.body.classList.remove('render-recording');
@@ -1720,7 +1826,7 @@ nui.registerPage('render', {
         // Also handle Esc as a fallback for browsers that don't fire
         // fullscreenchange reliably on key-exit.
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && isRecording) {
+            if (e.key === 'Escape' && isRecording && !autonomousRecording) {
                 exitRecordingMode();
             }
         });
@@ -1835,6 +1941,20 @@ nui.registerPage('render', {
             if (icon) icon.setAttribute('name', 'play');
             if (innerBtn) innerBtn.setAttribute('aria-label', 'Play');
             stopLoop();
+            // Autonomous run on the final slide: hold the end slide for the
+            // post-roll beat, then tell the runner this deck is complete.
+            // The runner stops OBS, finalizes the file, and advances the
+            // queue; the door poll navigates us to the next deck.
+            if (autonomousRecording && currentSlideIdx >= (deck?.slides?.length || 1) - 1) {
+                recordPhase = 'done-wait';
+                clearInterval(recordProgressTimer);
+                setTimeout(() => {
+                    recordPost('/api/record/done', { projectId })
+                        .then(r => { if (!r.ok) throw new Error(`done → HTTP ${r.status}`); })
+                        .catch(err => { console.error('[Record] done post failed:', err); });
+                }, 2000);
+                return;
+            }
             if (currentSlideIdx < (deck?.slides?.length || 1) - 1) {
                 setTimeout(() => loadSlide(currentSlideIdx + 1), 300);
                 if (audio.src) {
@@ -1942,6 +2062,10 @@ nui.registerPage('render', {
             renderSlideList();
         }
         loadSlide(0);
+        // Autonomous run: init-time paint is a valid phase start — the
+        // router may or may not follow up with show()→enterRoute, and
+        // maybeStartRecordingPhase is phase-guarded so double calls no-op.
+        if (autonomousRecording) maybeStartRecordingPhase();
 
         // Project switching goes through two doors — see the matching note in
         // editor.js. The page element is cached per route TYPE and the route
@@ -1979,6 +2103,7 @@ nui.registerPage('render', {
                     renderSlideList();
                 }
                 loadSlide(changedProject ? 0 : currentSlideIdx);
+                if (autonomousRecording) maybeStartRecordingPhase();
             });
         }
 
@@ -1993,6 +2118,14 @@ nui.registerPage('render', {
         });
     }
 });
+
+// The recording=1 fragment param marks an autonomous recording run. The
+// param persists in the hash across deck navigations (the page rewrites
+// its own URL with it), so reading the hash fresh is the single truth.
+// Kept at module scope and hoisted so init()'s deck resolution can call it.
+function isAutonomousRecording() {
+    return /(?:^|[?&])recording=1(?:&|$)/.test(location.hash);
+}
 
 function escapeHtml(s) {
     if (!s) return '';

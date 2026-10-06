@@ -88,10 +88,24 @@ function parseChatExport(arenaData) {
 
 
 
+    // Landmark overlay — same contract as parseArenaExport. The block
+    // sits top-level on the export file either way (arenaData.landmark),
+    // not inside session.*.
+    const landmark = arenaData.landmark;
+    if (landmark !== undefined && landmark !== null) {
+        if (typeof landmark !== 'object' || typeof landmark.title !== 'string' || !landmark.title.trim()) {
+            throw new Error('Invalid landmark block: { title: string } is required when landmark is present');
+        }
+        if (landmark.recordedAt != null && isNaN(new Date(landmark.recordedAt).getTime())) {
+            throw new Error(`Invalid landmark.recordedAt: "${landmark.recordedAt}" is not a parseable date`);
+        }
+    }
+
     return {
         id: session.id || 'unknown',
         exportedAt: exportedAt,
-        topic: (session.summary && session.summary.title) || 'Untitled Conversation',
+        topic: (landmark && landmark.title.trim()) || (session.summary && session.summary.title) || 'Untitled Conversation',
+        recordedAt: landmark?.recordedAt || null,
         // The human's topic for the session. On seeded exports this era's
         // session.title sometimes carries the seed itself ("Topic: …");
         // on seedless ones it is the only record of what the models were
@@ -181,11 +195,29 @@ function parseArenaExport(arenaData) {
         ? (moderatorMessage.content || '').replace(/^\s*Topic:\s*/i, '').trim()
         : null;
 
+    // Landmark overlay (selection pass): an explicit block added on top of
+    // the otherwise-untouched export. title = the human-chosen deck title;
+    // recordedAt = the date the conversation HAPPENED (the export date
+    // stays in exportedAt). Malformed overlays are caller errors and fail
+    // loud; absence of the block changes nothing (legacy imports keep
+    // working exactly as before).
+    const landmark = arenaData.landmark;
+    if (landmark !== undefined && landmark !== null) {
+        if (typeof landmark !== 'object' || typeof landmark.title !== 'string' || !landmark.title.trim()) {
+            throw new Error('Invalid landmark block: { title: string } is required when landmark is present');
+        }
+        if (landmark.recordedAt != null && isNaN(new Date(landmark.recordedAt).getTime())) {
+            throw new Error(`Invalid landmark.recordedAt: "${landmark.recordedAt}" is not a parseable date`);
+        }
+    }
+
     return {
         id: arenaData.id || arenaData.chatInfo?.id || 'unknown',
         exportedAt: arenaData.exportedAt || new Date().toISOString(),
         // Kept for backward compat / display — but DO NOT use for the topic slide.
-        topic: arenaData.topic || arenaData.chatInfo?.title || 'Untitled Conversation',
+        // A landmark title overrides whatever the AI summary said.
+        topic: (landmark && landmark.title.trim()) || arenaData.topic || arenaData.chatInfo?.title || 'Untitled Conversation',
+        recordedAt: landmark?.recordedAt || null,
         // The actual seed prompt that the first model responded to.
         // Verbatim from messages[0].content, minus the `Topic:` prefix.
         seedPrompt: seedPrompt,

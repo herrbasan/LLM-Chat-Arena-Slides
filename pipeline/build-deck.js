@@ -103,7 +103,9 @@ function formatHumanDate(iso) {
 
 function buildOpeningSlides(source) {
     const participants = source.participants.filter(Boolean);
-    const dateText = formatHumanDate(source.exportedAt) || 'an unknown date';
+    // recordedAt (landmark overlay) is when the conversation happened;
+    // exportedAt is only when the export file was written.
+    const dateText = formatHumanDate(source.recordedAt || source.exportedAt) || 'an unknown date';
     const participantLine = participants.length >= 2
         ? `${participants[0]} and ${participants[1]}`
         : (participants[0] || 'two language models');
@@ -144,7 +146,7 @@ function buildOpeningSlides(source) {
             narration: `This recording was generated on ${dateText}, featuring the models ${participantLine}. ${turnCount === 1 ? 'One' : capitalize(spell(turnCount))} turn${turnCount === 1 ? '' : 's'}.`,
             tts: null,
             meta: {
-                recordedAt: source.exportedAt,
+                recordedAt: source.recordedAt || source.exportedAt,
                 renderedAt: renderedAt,
                 models: modelChips,
                 turnCount: turnCount
@@ -295,6 +297,7 @@ async function cleanWithLLM(sourceData, outputDir = null, progress = () => {}, o
         exportedAt: sourceData.exportedAt || sourceData.source?.exportedAt || new Date().toISOString(),
         seedPrompt: sourceData.seedPrompt || sourceData.source?.seedPrompt || null,
         seedPromptRaw: sourceData.seedPromptRaw || sourceData.source?.seedPromptRaw || null,
+        recordedAt: sourceData.recordedAt || sourceData.source?.recordedAt || null,
         renderedAt: sourceData.renderedAt || sourceData.source?.renderedAt || null
     };
 
@@ -337,6 +340,7 @@ async function cleanWithLLM(sourceData, outputDir = null, progress = () => {}, o
         source: {
             arenaExportId: source.id,
             exportedAt: source.exportedAt,
+            recordedAt: source.recordedAt || null,
             topic: source.topic,
             seedPrompt: source.seedPrompt,
             seedPromptRaw: source.seedPromptRaw,
