@@ -1697,6 +1697,133 @@ if (process.env.NODE_ENV !== 'production') {
     });
 }
 
+// ─── Recording session orchestration (OBS capture runs) ─────────────
+// Registered BEFORE the static/SPA-fallback middleware — anything after
+// the fallback is unreachable. Ephemeral RAM-only state that lets the
+// queue runner (record-queue.mjs) and the kiosk render page coordinate.
+// Nothing here is persisted — a recording run is defined by the runner's
+// queue POST and dies with it.
+//
+// Deck lifecycle per run:
+//   runner POST /queue → page paints → POST /ready → runner StartRecord
+//   → OBS STARTED event → runner opens /door → page plays (progress pings)
+//   → last paragraph ends → 2s post-roll → POST /done → runner StopRecord
+//   → OBS STOPPED event (outputPath) → runner finalizes file, POST /advance
+//   → page sees door closed + current changed → hard-reload to next deck.
+const recordSession = {
+    queue: [],        // [{id, title, slug}] in run order, set by the runner
+    idx: 0,           // index of the deck the run is currently on
+    door: false,      // true = OBS capture is live for the current deck
+    readyAt: null,    // ms — page painted the current deck
+    doneAt: null,     // ms — page finished the current deck (post-roll incl.)
+    progress: null,   // last page ping: {projectId, slideIdx, slideCount, paraIdx, paraCount, ts}
+    finishedAt: null, // ms — whole run complete
+};
+const recordCurrent = () => recordSession.queue[recordSession.idx] ?? null;
+
+app.post('/api/record/reset', (req, res) => {
+    Object.assign(recordSession, { queue: [], idx: 0, door: false, readyAt: null, doneAt: null, progress: null, finishedAt: null });
+    res.json({ ok: true });
+});
+
+// decks: [{id, title, slug}] — the runner owns the order and naming.
+app.post('/api/record/queue', (req, res) => {
+    try {
+        const decks = req.body.decks;
+        if (!Array.isArray(decks) || decks.length === 0 || decks.some(d => !d.id)) {
+            return res.status(400).json({ error: 'decks must be a non-empty array of {id, title, slug}' });
+        }
+        Object.assign(recordSession, { queue: decks, idx: 0, door: false, readyAt: null, doneAt: null, progress: null, finishedAt: null });
+        res.json({ ok: true, count: decks.length });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/record/advance', (req, res) => {
+    if (recordSession.idx >= recordSession.queue.length - 1) {
+        recordSession.finishedAt = Date.now();
+        return res.json({ ok: true, finished: true, current: null });
+    }
+    recordSession.idx += 1;
+    recordSession.door = false;
+    recordSession.readyAt = null;
+    recordSession.doneAt = null;
+    recordSession.progress = null;
+    res.json({ ok: true, finished: false, current: recordCurrent() });
+});
+
+app.post('/api/record/finish', (req, res) => {
+    recordSession.finishedAt = Date.now();
+    recordSession.door = false;
+    res.json({ ok: true });
+});
+
+// Runner fault path: reset the per-deck signals WITHOUT advancing, so the
+// relaunched browser repaints this deck from scratch and the runner does
+// not see a stale readyAt from the dead attempt (which would start the
+// next capture against a corpse).
+app.post('/api/record/fault', (req, res) => {
+    recordSession.door = false;
+    recordSession.readyAt = null;
+    recordSession.doneAt = null;
+    recordSession.progress = null;
+    res.json({ ok: true });
+});
+
+// Runner-only gate. The page polls this; it may play only while open.
+app.post('/api/record/door', (req, res) => {
+    if (typeof req.body.open !== 'boolean') return res.status(400).json({ error: 'open (boolean) required' });
+    recordSession.door = req.body.open;
+    res.json({ ok: true, open: recordSession.door });
+});
+
+app.get('/api/record/state', (req, res) => {
+    res.json({ ...recordSession, current: recordCurrent() });
+});
+
+// Kiosk page resolves which deck to load from the run itself — covers the
+// first launch (no id in URL) and crash relaunches (deck restarts cleanly).
+app.get('/api/record/current', (req, res) => {
+    res.json({ current: recordCurrent(), finishedAt: recordSession.finishedAt });
+});
+
+app.post('/api/record/ready', (req, res) => {
+    try {
+        const { projectId } = req.body;
+        const cur = recordCurrent();
+        if (!cur || cur.id !== projectId) return res.status(409).json({ error: `ready for ${projectId} but run is on ${cur?.id ?? 'nothing'}` });
+        recordSession.readyAt = Date.now();
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/record/progress', (req, res) => {
+    try {
+        const { projectId, slideIdx, slideCount, paraIdx, paraCount } = req.body;
+        const cur = recordCurrent();
+        if (!cur || cur.id !== projectId) return res.status(409).json({ error: `progress for ${projectId} but run is on ${cur?.id ?? 'nothing'}` });
+        recordSession.progress = { projectId, slideIdx, slideCount, paraIdx, paraCount, ts: Date.now() };
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/record/done', (req, res) => {
+    try {
+        const { projectId } = req.body;
+        const cur = recordCurrent();
+        if (!cur || cur.id !== projectId) return res.status(409).json({ error: `done for ${projectId} but run is on ${cur?.id ?? 'nothing'}` });
+        recordSession.doneAt = Date.now();
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Serve the static web directory (NUI-based management UI)
 app.use(express.static(path.join(__dirname, '../web')));
 

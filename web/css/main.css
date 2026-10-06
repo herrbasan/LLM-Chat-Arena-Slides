@@ -1158,6 +1158,9 @@ body.render-recording {
      * surrounding area is whatever the app chrome happened to be. */
     background: #000;
     overflow: hidden;
+    /* Unattended capture: an idle cursor drifting over the frame must
+     * not end up in the recording. */
+    cursor: none;
 }
 body.render-recording #player-container {
     background: #000;
